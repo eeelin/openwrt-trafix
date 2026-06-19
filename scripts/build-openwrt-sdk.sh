@@ -33,8 +33,8 @@ Environment variables:
   FEEDS_UPDATE   Run feeds update/install before build, 1 or 0 (default: 1)
 
 Examples:
-  SDK_URL=https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz ./build.sh
-  SDK_DIR=$HOME/openwrt-sdk-23.05.5-x86-64 ./build.sh
+  SDK_URL=https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-sdk-22.03.5-x86-64_gcc-11.2.0_musl.Linux-x86_64.tar.xz ./build.sh
+  SDK_DIR=$HOME/openwrt-sdk-22.03.5-x86-64 ./build.sh
 USAGE
 }
 
@@ -71,7 +71,16 @@ prepare_sdk() {
   fi
 
   local extracted_root
-  extracted_root="$(tar -tf "$SDK_ARCHIVE" | head -n1 | cut -d/ -f1)"
+  extracted_root="$(python3 - "$SDK_ARCHIVE" <<'PY'
+import sys, tarfile
+with tarfile.open(sys.argv[1], 'r:*') as tf:
+    for member in tf:
+        name = member.name.split('/', 1)[0]
+        if name:
+            print(name)
+            break
+PY
+)"
   [[ -n "$extracted_root" ]] || fail "unable to determine SDK archive root from $SDK_ARCHIVE"
 
   SDK_DIR="$WORK_DIR/$extracted_root"
