@@ -1,0 +1,173 @@
+#!/bin/sh /etc/rc.common
+
+START=70
+STOP=60
+
+USE_PROCD=0
+EXTRA_COMMANDS="status"
+EXTRA_HELP="        status          Print current network status"
+
+check_ip() {
+	prompt="$1"
+	cip="$2"
+	[ -n "$cip" ] || return 0
+	info="$(curl -s "https://ipinfo.io/${cip}" | jq -r '.city + " / " + .country' 2>/dev/null)"
+	echo "${prompt} --> ${cip} [${info}]"
+}
+
+test_dns() {
+	gip="$(dig www.google.com a | awk '/^www.google.com/ {print $5; exit}')"
+	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[CheckDNS] www.google.com --> ${gip} [${info}]"
+
+	gip="$(dig www.google.com aaaa | awk '/^www.google.com/ {print $5; exit}')"
+	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[CheckDNS] www.google.com --> ${gip} [${info}]"
+}
+
+ensure_proxy() {
+	name="$1"
+	ips="$(nslookup -type=a "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
+	for ip in $ips; do
+		ipset -q test gfwlist "$ip" || {
+			echo "ipset add gfwlist ${ip} for ${name}"
+			ipset add gfwlist "$ip"
+		}
+	done
+
+	ips="$(nslookup -type=aaaa "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
+	for ip in $ips; do
+		ipset -q test gfwlist6 "$ip" || {
+			echo "ipset add gfwlist6 ${ip} for ${name}"
+			ipset add gfwlist6 "$ip"
+		}
+	done
+}
+
+status() {
+	ensure_proxy ifconfig.io
+	check_ip ifconfig.io "$(curl -s -4 https://ifconfig.io 2>/dev/null)"
+	check_ip ifconfig.io "$(curl -s -6 https://ifconfig.io 2>/dev/null)"
+	check_ip ipinfo.io "$(curl -s https://ipinfo.io/ip 2>/dev/null)"
+	check_ip v6.ipinfo.io "$(curl -s https://v6.ipinfo.io/ip 2>/dev/null)"
+	test_dns
+}
+
+setup_ipset_ipv4() {
+	ipset create gfwlist hash:ip 2>/dev/null
+	config_get ip_conf 'general' 'proxy_ipset_conf'
+	[ -f "$ip_conf" ] && for ip in $(cat "$ip_conf"); do ipset -q add gfwlist "$ip"; done
+
+	ipset create gfwlist-net hash:net 2>/dev/null
+	config_get net_conf 'general' 'proxy_ipset_net_conf'
+	[ -f "$net_conf" ] && for net in $(cat "$net_conf"); do ipset -q add gfwlist-net "$net"; done
+
+	ipset create gfwlist-bypass hash:ip 2>/dev/null
+	config_get ip_conf 'general' 'bypass_ipset_conf'
+	[ -f "$ip_conf" ] && for ip in $(cat "$ip_conf"); do ipset -q add gfwlist-bypass "$ip"; done
+
+	ipset create gfwlist-bypass-net hash:net 2>/dev/null
+	config_get net_conf 'general' 'bypass_ipset_net_conf'
+	[ -f "$net_conf" ] && for net in $(cat "$net_conf"); do ipset -q add gfwlist-bypass-net "$net"; done
+}
+
+setup_ipset_ipv6() {
+	ipset create gfwlist6 hash:ip family inet6 2>/dev/null
+	config_get ip_conf 'general' 'proxy_ip6set_conf'
+	[ -f "$ip_conf" ] && for ip in $(cat "$ip_conf"); do ipset -q add gfwlist6 "$ip"; done
+
+	ipset create gfwlist6-net hash:net family inet6 2>/dev/null
+	config_get net_conf 'general' 'proxy_ip6set_net_conf'
+	[ -f "$net_conf" ] && for net in $(cat "$net_conf"); do ipset -q add gfwlist6-net "$net"; done
+
+	ipset create gfwlist6-bypass hash:ip family inet6 2>/dev/null
+	config_get ip_conf 'general' 'bypass_ip6set_conf'
+	[ -f "$ip_conf" ] && for ip in $(cat "$ip_conf"); do ipset -q add gfwlist6-bypass "$ip"; done
+
+	ipset create gfwlist6-bypass-net hash:net family inet6 2>/dev/null
+	config_get net_conf 'general' 'bypass_ip6set_net_conf'
+	[ -f "$net_conf" ] && for net in $(cat "$net_conf"); do ipset -q add gfwlist6-bypass-net "$net"; done
+}
+
+setup_redir_iptables_ipv4() {
+	port="$1"
+
+	iptables -t nat -N GFWLIST 2>/dev/null
+	iptables -t nat -C GFWLIST -m set --match-set gfwlist-bypass dst -j RETURN 2>/dev/null || iptables -t nat -A GFWLIST -m set --match-set gfwlist-bypass dst -j RETURN
+	iptables -t nat -C GFWLIST -m set --match-set gfwlist-bypass-net dst -j RETURN 2>/dev/null || iptables -t nat -A GFWLIST -m set --match-set gfwlist-bypass-net dst -j RETURN
+	iptables -t nat -C GFWLIST -p tcp -m set --match-set gfwlist dst -j REDIRECT --to-ports "$port" 2>/dev/null || iptables -t nat -A GFWLIST -p tcp -m set --match-set gfwlist dst -j REDIRECT --to-ports "$port"
+	iptables -t nat -C GFWLIST -p tcp -m set --match-set gfwlist-net dst -j REDIRECT --to-ports "$port" 2>/dev/null || iptables -t nat -A GFWLIST -p tcp -m set --match-set gfwlist-net dst -j REDIRECT --to-ports "$port"
+	iptables -t nat -C PREROUTING -j GFWLIST 2>/dev/null || iptables -t nat -A PREROUTING -j GFWLIST
+	iptables -t nat -C OUTPUT -j GFWLIST 2>/dev/null || iptables -t nat -A OUTPUT -j GFWLIST
+
+	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
+	[ "$block_proxy_http3" = 1 ] || return 0
+
+	iptables -N BLOCKER 2>/dev/null
+	iptables -C FORWARD -p udp -j BLOCKER 2>/dev/null || iptables -A FORWARD -p udp -j BLOCKER
+	iptables -C BLOCKER -p udp --dport 443 -m set --match-set gfwlist dst -j DROP 2>/dev/null || iptables -A BLOCKER -p udp --dport 443 -m set --match-set gfwlist dst -j DROP
+	iptables -C BLOCKER -p udp --dport 443 -m set --match-set gfwlist-net dst -j DROP 2>/dev/null || iptables -A BLOCKER -p udp --dport 443 -m set --match-set gfwlist-net dst -j DROP
+}
+
+setup_redir_iptables_ipv6() {
+	port="$1"
+
+	ip6tables -t nat -N GFWLIST 2>/dev/null
+	ip6tables -t nat -C GFWLIST -m set --match-set gfwlist6-bypass dst -j RETURN 2>/dev/null || ip6tables -t nat -A GFWLIST -m set --match-set gfwlist6-bypass dst -j RETURN
+	ip6tables -t nat -C GFWLIST -m set --match-set gfwlist6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -t nat -A GFWLIST -m set --match-set gfwlist6-bypass-net dst -j RETURN
+	ip6tables -t nat -C GFWLIST -p tcp -m set --match-set gfwlist6 dst -j REDIRECT --to-ports "$port" 2>/dev/null || ip6tables -t nat -A GFWLIST -p tcp -m set --match-set gfwlist6 dst -j REDIRECT --to-ports "$port"
+	ip6tables -t nat -C GFWLIST -p tcp -m set --match-set gfwlist6-net dst -j REDIRECT --to-ports "$port" 2>/dev/null || ip6tables -t nat -A GFWLIST -p tcp -m set --match-set gfwlist6-net dst -j REDIRECT --to-ports "$port"
+	ip6tables -t nat -C PREROUTING -j GFWLIST 2>/dev/null || ip6tables -t nat -A PREROUTING -j GFWLIST
+	ip6tables -t nat -C OUTPUT -j GFWLIST 2>/dev/null || ip6tables -t nat -A OUTPUT -j GFWLIST
+
+	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
+	[ "$block_proxy_http3" = 1 ] || return 0
+
+	ip6tables -N BLOCKER 2>/dev/null
+	ip6tables -C FORWARD -p udp -j BLOCKER 2>/dev/null || ip6tables -A FORWARD -p udp -j BLOCKER
+	ip6tables -C BLOCKER -p udp --dport 443 -m set --match-set gfwlist6 dst -j DROP 2>/dev/null || ip6tables -A BLOCKER -p udp --dport 443 -m set --match-set gfwlist6 dst -j DROP
+	ip6tables -C BLOCKER -p udp --dport 443 -m set --match-set gfwlist6-net dst -j DROP 2>/dev/null || ip6tables -A BLOCKER -p udp --dport 443 -m set --match-set gfwlist6-net dst -j DROP
+}
+
+start() {
+	config_load 'gfwlist'
+	config_get port4 'general' 'redir_ipv4_port'
+	config_get port6 'general' 'redir_ipv6_port'
+
+	setup_ipset_ipv4
+	setup_ipset_ipv6
+	setup_redir_iptables_ipv4 "$port4"
+	setup_redir_iptables_ipv6 "$port6"
+}
+
+cleanup_redir_iptables_ipv4() {
+	iptables -t nat -D PREROUTING -j GFWLIST 2>/dev/null
+	iptables -t nat -D OUTPUT -j GFWLIST 2>/dev/null
+	iptables -t nat -F GFWLIST 2>/dev/null
+	iptables -t nat -X GFWLIST 2>/dev/null
+
+	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
+	[ "$block_proxy_http3" = 1 ] || return 0
+
+	iptables -D FORWARD -p udp -j BLOCKER 2>/dev/null
+	iptables -F BLOCKER 2>/dev/null
+	iptables -X BLOCKER 2>/dev/null
+}
+
+cleanup_redir_iptables_ipv6() {
+	ip6tables -t nat -D PREROUTING -j GFWLIST 2>/dev/null
+	ip6tables -t nat -D OUTPUT -j GFWLIST 2>/dev/null
+	ip6tables -t nat -F GFWLIST 2>/dev/null
+	ip6tables -t nat -X GFWLIST 2>/dev/null
+
+	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
+	[ "$block_proxy_http3" = 1 ] || return 0
+
+	ip6tables -D FORWARD -p udp -j BLOCKER 2>/dev/null
+	ip6tables -F BLOCKER 2>/dev/null
+	ip6tables -X BLOCKER 2>/dev/null
+}
+
+stop() {
+	config_load 'gfwlist'
+	cleanup_redir_iptables_ipv4
+	cleanup_redir_iptables_ipv6
+}
