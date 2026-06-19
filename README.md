@@ -25,4 +25,4 @@ Build artifacts are written to `dist/`.
 - `.github/openwrt-sdk-matrix.json`: editable SDK build matrix used by both workflows.
 
 
-Default CI targets currently prefer OpenWrt 22.03.5, and include an aarch64 target (`armsr/armv8`).
+Default CI targets currently prefer OpenWrt 22.03.5, and include an aarch64 target matching NanoPi R5C (`rockchip/armv8`).
