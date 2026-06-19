@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: |
+          bash -n build.sh
+          bash -n scripts/build-openwrt-sdk.sh
+          sh -n package/trafix/files/etc/init.d/trafix
+          sh -n package/trafix/files/usr/bin/trafix
+          sh -n package/trafix/files/usr/bin/trafix2dnsmasq.sh
+
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - id: matrix
+        name: Load build matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          with open('.github/openwrt-sdk-matrix.json') as f:
+              data = json.load(f)
+          print('matrix=' + json.dumps(data, separators=(',', ":")))
+          PY
+
+  build:
+    needs:
+      - lint
+      - prepare-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rsync zstd
+
+      - name: Build package
+        env:
+          SDK_URL: ${{ matrix.sdk_url }}
+          ARTIFACT_DIR: ${{ github.workspace }}/dist/${{ matrix.name }}
+        run: ./build.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}/*
+          if-no-files-found: error
