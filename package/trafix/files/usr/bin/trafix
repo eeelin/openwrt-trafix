@@ -1,11 +1,11 @@
 #!/bin/sh
 
 BINDIR="$(dirname "$0")"
-CONF_PATH=/etc/gfwlist/gfwlist.yaml
-NAMES_CONF=/var/gfwlist/names.conf
-PROXY_IPSET_CONF=/etc/gfwlist/proxy-ipset-net.conf
-PROXY_IP6SET_CONF=/etc/gfwlist/proxy-ip6set-net.conf
-DNSMASQ_OUT=/tmp/dnsmasq.d/gfwlist.conf
+CONF_PATH=/etc/trafix/trafix.yaml
+NAMES_CONF=/var/trafix/names.conf
+PROXY_IPSET_CONF=/etc/trafix/proxy-ipset-net.conf
+PROXY_IP6SET_CONF=/etc/trafix/proxy-ip6set-net.conf
+DNSMASQ_OUT=/tmp/dnsmasq.d/trafix.conf
 
 log() {
 	echo "$@"
@@ -23,10 +23,10 @@ reset_conf() {
 
 generate_dnsmasq_conf() {
 	mkdir -p "$(dirname "$DNSMASQ_OUT")"
-	"${BINDIR}/gfwlist2dnsmasq.sh" \
+	"${BINDIR}/trafix2dnsmasq.sh" \
 		-o "$DNSMASQ_OUT" \
 		-p 6053 \
-		-s gfwlist,gfwlist6 \
+		-s trafix,trafix6 \
 		--extra-domain-file "$NAMES_CONF"
 }
 
