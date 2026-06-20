@@ -4,11 +4,15 @@ START=70
 STOP=60
 
 USE_PROCD=0
-EXTRA_COMMANDS="status"
-EXTRA_HELP="        status          Print current network status"
+EXTRA_COMMANDS="status dryrun_start dryrun_stop dryrun_restart"
+EXTRA_HELP="        status          Print current network status\n\
+\t    dryrun_start    Print commands that would be executed during start\n\
+\t    dryrun_stop     Print commands that would be executed during stop\n\
+\t    dryrun_restart  Print commands that would be executed during restart"
 
 STATE_DIR=/var/trafix
 RUNTIME_ENV="$STATE_DIR/runtime.env"
+DRY_RUN="${TRAFIX_DRY_RUN:-0}"
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
 PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
 PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"
@@ -32,6 +36,14 @@ check_ip() {
 	echo "${prompt} --> ${cip} [${info}]"
 }
 
+run_cmd() {
+	if [ "$DRY_RUN" = 1 ]; then
+		echo "+ $*"
+	else
+		eval "$@"
+	fi
+}
+
 test_dns() {
 	gip="$(dig www.google.com a | awk '/^www.google.com/ {print $5; exit}')"
 	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[CheckDNS] www.google.com --> ${gip} [${info}]"
@@ -46,7 +58,7 @@ ensure_proxy() {
 	for ip in $ips; do
 		ipset -q test trafix "$ip" || {
 			echo "ipset add trafix ${ip} for ${name}"
-			ipset add trafix "$ip"
+			run_cmd "ipset add trafix \"$ip\""
 		}
 	done
 
@@ -54,7 +66,7 @@ ensure_proxy() {
 	for ip in $ips; do
 		ipset -q test trafix6 "$ip" || {
 			echo "ipset add trafix6 ${ip} for ${name}"
-			ipset add trafix6 "$ip"
+			run_cmd "ipset add trafix6 \"$ip\""
 		}
 	done
 }
@@ -81,64 +93,64 @@ add_entries() {
 	file_path="$2"
 	[ -f "$file_path" ] || return 0
 	while IFS= read -r value; do
-		[ -n "$value" ] && ipset -q add "$set_name" "$value"
+		[ -n "$value" ] && run_cmd "ipset -q add \"$set_name\" \"$value\""
 	done < "$file_path"
 }
 
 setup_ipset_ipv4() {
-	ipset create trafix hash:ip 2>/dev/null
+	run_cmd "ipset create trafix hash:ip 2>/dev/null"
 	add_entries trafix "$PROXY_IPSET_CONF"
 
-	ipset create trafix-net hash:net 2>/dev/null
+	run_cmd "ipset create trafix-net hash:net 2>/dev/null"
 	add_entries trafix-net "$PROXY_IPSET_NET_CONF"
 
-	ipset create trafix-bypass hash:ip 2>/dev/null
+	run_cmd "ipset create trafix-bypass hash:ip 2>/dev/null"
 	add_entries trafix-bypass "$BYPASS_IPSET_CONF"
 
-	ipset create trafix-bypass-net hash:net 2>/dev/null
+	run_cmd "ipset create trafix-bypass-net hash:net 2>/dev/null"
 	add_entries trafix-bypass-net "$BYPASS_IPSET_NET_CONF"
 
-	ipset create trafix-block hash:ip 2>/dev/null
+	run_cmd "ipset create trafix-block hash:ip 2>/dev/null"
 	add_entries trafix-block "$BLOCK_IPSET_CONF"
 
-	ipset create trafix-block-net hash:net 2>/dev/null
+	run_cmd "ipset create trafix-block-net hash:net 2>/dev/null"
 	add_entries trafix-block-net "$BLOCK_IPSET_NET_CONF"
 }
 
 setup_ipset_ipv6() {
-	ipset create trafix6 hash:ip family inet6 2>/dev/null
+	run_cmd "ipset create trafix6 hash:ip family inet6 2>/dev/null"
 	add_entries trafix6 "$PROXY_IP6SET_CONF"
 
-	ipset create trafix6-net hash:net family inet6 2>/dev/null
+	run_cmd "ipset create trafix6-net hash:net family inet6 2>/dev/null"
 	add_entries trafix6-net "$PROXY_IP6SET_NET_CONF"
 
-	ipset create trafix6-bypass hash:ip family inet6 2>/dev/null
+	run_cmd "ipset create trafix6-bypass hash:ip family inet6 2>/dev/null"
 	add_entries trafix6-bypass "$BYPASS_IP6SET_CONF"
 
-	ipset create trafix6-bypass-net hash:net family inet6 2>/dev/null
+	run_cmd "ipset create trafix6-bypass-net hash:net family inet6 2>/dev/null"
 	add_entries trafix6-bypass-net "$BYPASS_IP6SET_NET_CONF"
 
-	ipset create trafix6-block hash:ip family inet6 2>/dev/null
+	run_cmd "ipset create trafix6-block hash:ip family inet6 2>/dev/null"
 	add_entries trafix6-block "$BLOCK_IP6SET_CONF"
 
-	ipset create trafix6-block-net hash:net family inet6 2>/dev/null
+	run_cmd "ipset create trafix6-block-net hash:net family inet6 2>/dev/null"
 	add_entries trafix6-block-net "$BLOCK_IP6SET_NET_CONF"
 }
 
 setup_block_filter_ipv4() {
-	iptables -N TRAFIX_FILTER 2>/dev/null
-	iptables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || iptables -A FORWARD -j TRAFIX_FILTER
-	iptables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || iptables -A OUTPUT -j TRAFIX_FILTER
-	iptables -C TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP
-	iptables -C TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP
+	run_cmd "iptables -N TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || iptables -A FORWARD -j TRAFIX_FILTER"
+	run_cmd "iptables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || iptables -A OUTPUT -j TRAFIX_FILTER"
+	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP"
+	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP"
 }
 
 setup_block_filter_ipv6() {
-	ip6tables -N TRAFIX_FILTER 2>/dev/null
-	ip6tables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || ip6tables -A FORWARD -j TRAFIX_FILTER
-	ip6tables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || ip6tables -A OUTPUT -j TRAFIX_FILTER
-	ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP
-	ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP
+	run_cmd "ip6tables -N TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || ip6tables -A FORWARD -j TRAFIX_FILTER"
+	run_cmd "ip6tables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || ip6tables -A OUTPUT -j TRAFIX_FILTER"
+	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP"
+	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP"
 }
 
 setup_http3_block_ipv4() {
@@ -146,18 +158,18 @@ setup_http3_block_ipv4() {
 	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
 	[ "$block_proxy_http3" = 1 ] || return 0
 
-	iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP
-	iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP
+	run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP"
+	run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP"
 
 	case "$port_policy" in
 		proxy)
-			iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN
-			iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN
-			iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP
+			run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN"
+			run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN"
+			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP"
 			;;
 		*)
-			iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP
-			iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP
+			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP"
+			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP"
 			;;
 	esac
 }
@@ -167,18 +179,18 @@ setup_http3_block_ipv6() {
 	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
 	[ "$block_proxy_http3" = 1 ] || return 0
 
-	ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP
-	ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP
+	run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP"
+	run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP"
 
 	case "$port_policy" in
 		proxy)
-			ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN
-			ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN
-			ip6tables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -j DROP
+			run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN"
+			run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN"
+			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -j DROP"
 			;;
 		*)
-			ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP
-			ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP
+			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP"
+			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP"
 			;;
 	esac
 }
@@ -187,48 +199,48 @@ setup_redir_iptables_ipv4() {
 	port="$1"
 	load_runtime_env
 
-	iptables -t nat -N TRAFIX 2>/dev/null
-	iptables -t nat -C TRAFIX -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass dst -j RETURN
-	iptables -t nat -C TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN
+	run_cmd "iptables -t nat -N TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -C TRAFIX -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass dst -j RETURN"
+	run_cmd "iptables -t nat -C TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN"
 
 	case "$FINAL_ACTION" in
 		proxy)
-			iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "$port" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "$port"
+			run_cmd "iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports \"$port\""
 			setup_http3_block_ipv4 proxy
 			;;
 		*)
-			iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "$port" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "$port"
-			iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports "$port" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports "$port"
+			run_cmd "iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports \"$port\""
+			run_cmd "iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports \"$port\""
 			setup_http3_block_ipv4 bypass
 			;;
 	esac
 
-	iptables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || iptables -t nat -A PREROUTING -j TRAFIX
-	iptables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || iptables -t nat -A OUTPUT -j TRAFIX
+	run_cmd "iptables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || iptables -t nat -A PREROUTING -j TRAFIX"
+	run_cmd "iptables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || iptables -t nat -A OUTPUT -j TRAFIX"
 }
 
 setup_redir_iptables_ipv6() {
 	port="$1"
 	load_runtime_env
 
-	ip6tables -t nat -N TRAFIX 2>/dev/null
-	ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass dst -j RETURN
-	ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN
+	run_cmd "ip6tables -t nat -N TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass dst -j RETURN"
+	run_cmd "ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN"
 
 	case "$FINAL_ACTION" in
 		proxy)
-			ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "$port" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "$port"
+			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports \"$port\""
 			setup_http3_block_ipv6 proxy
 			;;
 		*)
-			ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "$port" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "$port"
-			ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports "$port" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports "$port"
+			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports \"$port\""
+			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports \"$port\""
 			setup_http3_block_ipv6 bypass
 			;;
 	esac
 
-	ip6tables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || ip6tables -t nat -A PREROUTING -j TRAFIX
-	ip6tables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || ip6tables -t nat -A OUTPUT -j TRAFIX
+	run_cmd "ip6tables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || ip6tables -t nat -A PREROUTING -j TRAFIX"
+	run_cmd "ip6tables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || ip6tables -t nat -A OUTPUT -j TRAFIX"
 }
 
 start() {
@@ -245,36 +257,57 @@ start() {
 }
 
 cleanup_filter_ipv4() {
-	iptables -D FORWARD -j TRAFIX_FILTER 2>/dev/null
-	iptables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null
-	iptables -F TRAFIX_FILTER 2>/dev/null
-	iptables -X TRAFIX_FILTER 2>/dev/null
+	run_cmd "iptables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -F TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -X TRAFIX_FILTER 2>/dev/null"
 }
 
 cleanup_filter_ipv6() {
-	ip6tables -D FORWARD -j TRAFIX_FILTER 2>/dev/null
-	ip6tables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null
-	ip6tables -F TRAFIX_FILTER 2>/dev/null
-	ip6tables -X TRAFIX_FILTER 2>/dev/null
+	run_cmd "ip6tables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -F TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -X TRAFIX_FILTER 2>/dev/null"
 }
 
 cleanup_redir_iptables_ipv4() {
-	iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null
-	iptables -t nat -D OUTPUT -j TRAFIX 2>/dev/null
-	iptables -t nat -F TRAFIX 2>/dev/null
-	iptables -t nat -X TRAFIX 2>/dev/null
+	run_cmd "iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -F TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -X TRAFIX 2>/dev/null"
 	cleanup_filter_ipv4
 }
 
 cleanup_redir_iptables_ipv6() {
-	ip6tables -t nat -D PREROUTING -j TRAFIX 2>/dev/null
-	ip6tables -t nat -D OUTPUT -j TRAFIX 2>/dev/null
-	ip6tables -t nat -F TRAFIX 2>/dev/null
-	ip6tables -t nat -X TRAFIX 2>/dev/null
+	run_cmd "ip6tables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -F TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -X TRAFIX 2>/dev/null"
 	cleanup_filter_ipv6
 }
 
 stop() {
 	cleanup_redir_iptables_ipv4
 	cleanup_redir_iptables_ipv6
+}
+
+dryrun_start() {
+	DRY_RUN=1
+	load_runtime_env
+	echo "# dry-run start (FINAL_ACTION=${FINAL_ACTION})"
+	start
+}
+
+dryrun_stop() {
+	DRY_RUN=1
+	echo "# dry-run stop"
+	stop
+}
+
+dryrun_restart() {
+	DRY_RUN=1
+	load_runtime_env
+	echo "# dry-run restart (FINAL_ACTION=${FINAL_ACTION})"
+	stop
+	start
 }
