@@ -74,3 +74,48 @@ jobs:
           name: ${{ matrix.name }}
           path: dist/${{ matrix.name }}/*
           if-no-files-found: error
+
+  publish_feed:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install feed dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: feed-artifacts
+          merge-multiple: false
+
+      - name: Build feed index
+        run: |
+          python3 scripts/build-openwrt-feed.py \
+            --artifacts-dir feed-artifacts \
+            --output-dir site
+          find site -maxdepth 2 -type f | sort
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

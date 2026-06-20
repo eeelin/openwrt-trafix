@@ -20,7 +20,7 @@ Build artifacts are written to `dist/`.
 
 ## OpenWrt package feed
 
-Release tags also publish a simple OpenWrt package feed to GitHub Pages.
+Pushes to `main` publish a simple OpenWrt package feed to GitHub Pages. Release tags only publish the GitHub Release assets.
 
 Feed URLs:
 
@@ -37,8 +37,8 @@ opkg install trafix
 
 ## GitHub Actions
 
-- `.github/workflows/build.yml`: validates scripts and builds the package on push, pull request, and manual trigger.
-- `.github/workflows/release.yml`: builds release assets, publishes a GitHub Release, and updates the GitHub Pages OpenWrt feed when a tag matching `v*` is pushed.
+- `.github/workflows/build.yml`: validates scripts, builds the package, and publishes the GitHub Pages OpenWrt feed on pushes to `main`.
+- `.github/workflows/release.yml`: builds release assets and publishes a GitHub Release when a tag matching `v*` is pushed.
 - `.github/openwrt-sdk-matrix.json`: editable SDK build matrix used by both workflows.
 
 
