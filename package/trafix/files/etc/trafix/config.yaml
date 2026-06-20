@@ -20,4 +20,29 @@ route_rules:
       - private-and-local
     action: bypass
 
+status_tests:
+  proxy:
+    ipv4:
+      - domain: ifconfig.io
+        url: https://ifconfig.io
+    ipv6:
+      - domain: ifconfig.io
+        url: https://ifconfig.io
+  bypass:
+    ipv4:
+      - domain: ipinfo.io
+        url: https://ipinfo.io/ip
+    ipv6:
+      - domain: v6.ipinfo.io
+        url: https://v6.ipinfo.io/ip
+  dns:
+    ipv4:
+      - www.google.com
+      - ifconfig.io
+      - openwrt.org
+    ipv6:
+      - www.google.com
+      - ifconfig.io
+      - openwrt.org
+
 final_action: bypass
