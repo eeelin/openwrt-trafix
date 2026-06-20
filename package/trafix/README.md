@@ -17,7 +17,7 @@ This directory contains a standard OpenWrt package definition for `trafix`.
 
 - `rule_sets`: inline, local, or remote matcher sources
 - `route_rules`: ordered routing decisions with `proxy`, `bypass`, or `block`
-- `status_tests`: configurable `status` command targets for proxy / bypass / DNS checks
+- `status_tests`: configurable `check` command targets for proxy / bypass / DNS checks
 - `final_action`: default route policy (`bypass` or `proxy`)
 
 Currently supported matcher types in `route_rules` are:
@@ -38,6 +38,14 @@ The `status_tests` section is split by:
 - `bypass.ipv6`
 - `dns.ipv4`
 - `dns.ipv6`
+
+## Diagnostics
+
+Run configured connectivity / DNS checks with:
+
+```sh
+/etc/init.d/trafix check
+```
 
 ## Dry run
 
