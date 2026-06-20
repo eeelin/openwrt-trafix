@@ -9,7 +9,7 @@ This directory contains a standard OpenWrt package definition for `trafix`.
 - `files/etc/trafix/config.yaml`: unified rule configuration
 - `files/etc/init.d/trafix`: service script
 - `files/usr/bin/trafix`: rule compiler / updater
-- `files/usr/bin/trafix2dnsmasq.sh`: legacy helper retained for reference
+- `files/usr/bin/trafix2dnsmasq.sh`: dnsmasq helper script
 
 ## Config model
 

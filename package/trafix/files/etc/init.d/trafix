@@ -9,9 +9,6 @@ EXTRA_HELP="        status          Print current network status"
 
 STATE_DIR=/var/trafix
 RUNTIME_ENV="$STATE_DIR/runtime.env"
-DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
-LEGACY_CONFIG_FILE=/etc/trafix/trafix.yaml
-
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
 PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
 PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"

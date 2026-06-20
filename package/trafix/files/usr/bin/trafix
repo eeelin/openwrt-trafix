@@ -4,7 +4,6 @@ set -e
 
 BINDIR="$(dirname "$0")"
 DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
-LEGACY_CONFIG_FILE=/etc/trafix/trafix.yaml
 STATE_DIR="${TRAFIX_STATE_DIR:-/var/trafix}"
 RULESET_CACHE_DIR="$STATE_DIR/rule-set-cache"
 DNSMASQ_OUT="${TRAFIX_DNSMASQ_OUT:-/tmp/dnsmasq.d/trafix.conf}"
@@ -80,13 +79,7 @@ resolve_config_file() {
 		config_file="$(uci -q get trafix.general.config_file 2>/dev/null)"
 	fi
 	if [ -z "$config_file" ]; then
-		if [ -f "$DEFAULT_CONFIG_FILE" ]; then
-			config_file="$DEFAULT_CONFIG_FILE"
-		elif [ -f "$LEGACY_CONFIG_FILE" ]; then
-			config_file="$LEGACY_CONFIG_FILE"
-		else
-			config_file="$DEFAULT_CONFIG_FILE"
-		fi
+		config_file="$DEFAULT_CONFIG_FILE"
 	fi
 	echo "$config_file"
 }
@@ -105,10 +98,6 @@ load_config_json() {
 	CONFIG_FILE="$(resolve_config_file)"
 	[ -f "$CONFIG_FILE" ] || fail "config file not found: $CONFIG_FILE"
 	yq -o=json '.' "$CONFIG_FILE" > "$CONFIG_JSON" || fail "failed to parse $CONFIG_FILE"
-}
-
-is_legacy_config() {
-	jq -e 'has("remoteRules") or has("rules") or has("names")' "$CONFIG_JSON" >/dev/null 2>&1
 }
 
 validate_final_action() {
@@ -286,42 +275,6 @@ compile_new_config() {
 	printf 'FINAL_ACTION=%s\n' "$final_action" > "$RUNTIME_ENV"
 }
 
-compile_legacy_config() {
-	printf 'FINAL_ACTION=bypass\n' > "$RUNTIME_ENV"
-
-	for url in $(yq -r '.remoteRules[]?.url // empty' "$CONFIG_FILE"); do
-		log "processing legacy remote rule source $url"
-		curl -fsSL "$url" | yq -r '.payload[]? // empty' | while IFS= read -r payload_line; do
-			legacy_tmp="$TMP_DIR/legacy.$$"
-			: > "$legacy_tmp"
-			append_payload_line "$payload_line" "$legacy_tmp"
-			while IFS="$(printf '\t')" read -r matcher_type matcher_value; do
-				[ -n "$matcher_type" ] && append_compiled_match "$matcher_type" "$matcher_value" proxy
-			done < "$legacy_tmp"
-			rm -f "$legacy_tmp"
-			done
-	done
-
-	for path in $(yq -r '.rules[]?.path // empty' "$CONFIG_FILE"); do
-		log "processing legacy local rule source $path"
-		yq -r '.payload[]? // empty' "$path" | while IFS= read -r payload_line; do
-			legacy_tmp="$TMP_DIR/legacy.$$"
-			: > "$legacy_tmp"
-			append_payload_line "$payload_line" "$legacy_tmp"
-			while IFS="$(printf '\t')" read -r matcher_type matcher_value; do
-				[ -n "$matcher_type" ] && append_compiled_match "$matcher_type" "$matcher_value" proxy
-			done < "$legacy_tmp"
-			rm -f "$legacy_tmp"
-			done
-	done
-
-	for name in $(yq -r '.names[]? // empty' "$CONFIG_FILE"); do
-		append_compiled_match domain_suffix "$name" proxy
-	done
-
-	awk -F '\t' '!seen[$1 FS $2]++ { print }' "$COMPILED_MATCHES" > "$EXPANDED_MATCHES"
-}
-
 is_ipv4_single() {
 	case "$1" in
 		*/*)
@@ -462,12 +415,7 @@ update() {
 	validate_dependencies
 	prepare_workspace
 	load_config_json
-	if is_legacy_config; then
-		log "detected legacy trafix config schema, compiling in compatibility mode"
-		compile_legacy_config
-	else
-		compile_new_config
-	fi
+	compile_new_config
 	materialize_lists
 	generate_dnsmasq_conf
 }
