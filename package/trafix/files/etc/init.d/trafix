@@ -4,7 +4,7 @@ START=70
 STOP=60
 
 USE_PROCD=0
-EXTRA_COMMANDS="status dryrun_start dryrun_stop dryrun_restart"
+EXTRA_COMMANDS="check dryrun_start dryrun_stop dryrun_restart"
 EXTRA_HELP="        status          Print current network status\n\
 \t    dryrun_start    Print commands that would be executed during start\n\
 \t    dryrun_stop     Print commands that would be executed during stop\n\
@@ -150,7 +150,7 @@ status_group() {
 		done
 }
 
-status() {
+check() {
 	config_file="$(resolve_config_file)"
 	status_group proxy ipv4 "$config_file"
 	status_group proxy ipv6 "$config_file"
