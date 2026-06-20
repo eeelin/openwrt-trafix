@@ -96,6 +96,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Install feed dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
