@@ -13,6 +13,7 @@ EXTRA_HELP="        status          Print current network status\n\
 STATE_DIR=/var/trafix
 RUNTIME_ENV="$STATE_DIR/runtime.env"
 DRY_RUN="${TRAFIX_DRY_RUN:-0}"
+DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
 PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
 PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"
@@ -36,6 +37,17 @@ check_ip() {
 	echo "${prompt} --> ${cip} [${info}]"
 }
 
+resolve_config_file() {
+	config_file="${TRAFIX_CONFIG:-}"
+	if [ -z "$config_file" ] && command -v uci >/dev/null 2>&1; then
+		config_file="$(uci -q get trafix.general.config_file 2>/dev/null)"
+	fi
+	if [ -z "$config_file" ]; then
+		config_file="$DEFAULT_CONFIG_FILE"
+	fi
+	echo "$config_file"
+}
+
 run_cmd() {
 	if [ "$DRY_RUN" = 1 ]; then
 		echo "+ $*"
@@ -44,39 +56,106 @@ run_cmd() {
 	fi
 }
 
-test_dns() {
-	gip="$(dig www.google.com a | awk '/^www.google.com/ {print $5; exit}')"
-	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[CheckDNS] www.google.com --> ${gip} [${info}]"
+test_dns_domain() {
+	family="$1"
+	domain="$2"
+	label_family="$(printf "%s" "$family" | tr "[:lower:]" "[:upper:]")"
+	case "$family" in
+		ipv4)
+			record_type="a"
+			;;
+		ipv6)
+			record_type="aaaa"
+			;;
+		*)
+			return 1
+			;;
+	esac
+	gip="$(dig "$domain" "$record_type" | awk -v domain="$domain" '$1 == domain"." {print $5; exit}')"
+	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[DNS/${label_family}] ${domain} --> ${gip} [${info}]"
+}
 
-	gip="$(dig www.google.com aaaa | awk '/^www.google.com/ {print $5; exit}')"
-	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[CheckDNS] www.google.com --> ${gip} [${info}]"
+test_dns() {
+	config_file="$(resolve_config_file)"
+	command -v yq >/dev/null 2>&1 || {
+		echo "[DNS] yq not available, skip dns tests"
+		return 0
+	}
+	for family in ipv4 ipv6; do
+		yq -r ".status_tests.dns.${family}[]? // empty" "$config_file" 2>/dev/null | while IFS= read -r domain; do
+			[ -n "$domain" ] && test_dns_domain "$family" "$domain"
+		done
+	done
 }
 
 ensure_proxy() {
 	name="$1"
-	ips="$(nslookup -type=a "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
+	family="$2"
+	case "$family" in
+		ipv4)
+			record_type="a"
+			set_name="trafix"
+			;;
+		ipv6)
+			record_type="aaaa"
+			set_name="trafix6"
+			;;
+		*)
+			return 1
+			;;
+	esac
+	ips="$(nslookup -type="$record_type" "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
 	for ip in $ips; do
-		ipset -q test trafix "$ip" || {
-			echo "ipset add trafix ${ip} for ${name}"
-			run_cmd "ipset add trafix \"$ip\""
-		}
-	done
-
-	ips="$(nslookup -type=aaaa "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
-	for ip in $ips; do
-		ipset -q test trafix6 "$ip" || {
-			echo "ipset add trafix6 ${ip} for ${name}"
-			run_cmd "ipset add trafix6 \"$ip\""
+		ipset -q test "$set_name" "$ip" || {
+			echo "ipset add ${set_name} ${ip} for ${name}"
+			run_cmd "ipset add ${set_name} \"$ip\""
 		}
 	done
 }
 
+status_http_test() {
+	action="$1"
+	family="$2"
+	domain="$3"
+	url="$4"
+	case "$family" in
+		ipv4)
+			curl_flag="-4"
+			;;
+		ipv6)
+			curl_flag="-6"
+			;;
+		*)
+			return 1
+			;;
+	esac
+	[ "$action" = "proxy" ] && ensure_proxy "$domain" "$family"
+	label_action=$(printf "%s" "$action" | tr "[:lower:]" "[:upper:]")
+	label_family=$(printf "%s" "$family" | tr "[:lower:]" "[:upper:]")
+	check_ip "[${label_action}/${label_family}] ${domain}" "$(curl -s ${curl_flag} "$url" 2>/dev/null)"
+}
+
+status_group() {
+	action="$1"
+	family="$2"
+	config_file="$3"
+	command -v yq >/dev/null 2>&1 || {
+		echo "[status/${action}/${family}] yq not available, skip"
+		return 0
+	}
+	yq -o=json ".status_tests.${action}.${family} // []" "$config_file" 2>/dev/null | \
+		jq -r '.[]? | [.domain // "", .url // ""] | @tsv' | \
+		while IFS="$(printf '\t')" read -r domain url; do
+			[ -n "$domain" ] && [ -n "$url" ] && status_http_test "$action" "$family" "$domain" "$url"
+		done
+}
+
 status() {
-	ensure_proxy ifconfig.io
-	check_ip ifconfig.io "$(curl -s -4 https://ifconfig.io 2>/dev/null)"
-	check_ip ifconfig.io "$(curl -s -6 https://ifconfig.io 2>/dev/null)"
-	check_ip ipinfo.io "$(curl -s https://ipinfo.io/ip 2>/dev/null)"
-	check_ip v6.ipinfo.io "$(curl -s https://v6.ipinfo.io/ip 2>/dev/null)"
+	config_file="$(resolve_config_file)"
+	status_group proxy ipv4 "$config_file"
+	status_group proxy ipv6 "$config_file"
+	status_group bypass ipv4 "$config_file"
+	status_group bypass ipv6 "$config_file"
 	test_dns
 }
 
