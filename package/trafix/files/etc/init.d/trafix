@@ -59,6 +59,7 @@ run_cmd() {
 test_dns_domain() {
 	family="$1"
 	domain="$2"
+	label_family="$(printf "%s" "$family" | tr "[:lower:]" "[:upper:]")"
 	case "$family" in
 		ipv4)
 			record_type="a"
@@ -71,7 +72,7 @@ test_dns_domain() {
 			;;
 	esac
 	gip="$(dig "$domain" "$record_type" | awk -v domain="$domain" '$1 == domain"." {print $5; exit}')"
-	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[DNS/${family}] ${domain} --> ${gip} [${info}]"
+	[ -n "$gip" ] && info="$(curl -s "https://ipinfo.io/${gip}" | jq -r '.org + " @ " + .city + " / " + .country' 2>/dev/null)" && echo "[DNS/${label_family}] ${domain} --> ${gip} [${info}]"
 }
 
 test_dns() {
@@ -129,7 +130,9 @@ status_http_test() {
 			;;
 	esac
 	[ "$action" = "proxy" ] && ensure_proxy "$domain" "$family"
-	check_ip "[${action}/${family}] ${domain}" "$(curl -s ${curl_flag} "$url" 2>/dev/null)"
+	label_action=$(printf "%s" "$action" | tr "[:lower:]" "[:upper:]")
+	label_family=$(printf "%s" "$family" | tr "[:lower:]" "[:upper:]")
+	check_ip "[${label_action}/${label_family}] ${domain}" "$(curl -s ${curl_flag} "$url" 2>/dev/null)"
 }
 
 status_group() {
