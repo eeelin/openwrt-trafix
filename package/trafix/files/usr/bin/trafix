@@ -1,11 +1,41 @@
 #!/bin/sh
 
+set -e
+
 BINDIR="$(dirname "$0")"
-CONF_PATH=/etc/trafix/trafix.yaml
-NAMES_CONF=/var/trafix/names.conf
-PROXY_IPSET_CONF=/etc/trafix/proxy-ipset-net.conf
-PROXY_IP6SET_CONF=/etc/trafix/proxy-ip6set-net.conf
-DNSMASQ_OUT=/tmp/dnsmasq.d/trafix.conf
+DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
+LEGACY_CONFIG_FILE=/etc/trafix/trafix.yaml
+STATE_DIR="${TRAFIX_STATE_DIR:-/var/trafix}"
+RULESET_CACHE_DIR="$STATE_DIR/rule-set-cache"
+DNSMASQ_OUT="${TRAFIX_DNSMASQ_OUT:-/tmp/dnsmasq.d/trafix.conf}"
+DNS_SERVER=127.0.0.1
+DNS_PORT=6053
+RUNTIME_ENV="$STATE_DIR/runtime.env"
+
+PROXY_DOMAIN_LIST="$STATE_DIR/proxy-domain.list"
+BYPASS_DOMAIN_LIST="$STATE_DIR/bypass-domain.list"
+BLOCK_DOMAIN_LIST="$STATE_DIR/block-domain.list"
+
+PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
+PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
+PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"
+PROXY_IP6SET_NET_CONF="$STATE_DIR/proxy-ip6set-net.conf"
+
+BYPASS_IPSET_CONF="$STATE_DIR/bypass-ipset.conf"
+BYPASS_IPSET_NET_CONF="$STATE_DIR/bypass-ipset-net.conf"
+BYPASS_IP6SET_CONF="$STATE_DIR/bypass-ip6set.conf"
+BYPASS_IP6SET_NET_CONF="$STATE_DIR/bypass-ip6set-net.conf"
+
+BLOCK_IPSET_CONF="$STATE_DIR/block-ipset.conf"
+BLOCK_IPSET_NET_CONF="$STATE_DIR/block-ipset-net.conf"
+BLOCK_IP6SET_CONF="$STATE_DIR/block-ip6set.conf"
+BLOCK_IP6SET_NET_CONF="$STATE_DIR/block-ip6set-net.conf"
+
+TMP_DIR=
+CONFIG_FILE=
+CONFIG_JSON=
+COMPILED_MATCHES=
+EXPANDED_MATCHES=
 
 log() {
 	echo "$@"
@@ -15,66 +45,430 @@ err() {
 	echo "$@" >&2
 }
 
+fail() {
+	err "$@"
+	exit 1
+}
+
+require_command() {
+	command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+validate_dependencies() {
+	require_command jq
+	require_command yq
+	require_command curl
+	require_command awk
+	require_command sort
+}
+
+cleanup() {
+	[ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT INT TERM
+
 reset_conf() {
 	[ -f "$1" ] && rm -f "$1"
 	mkdir -p "$(dirname "$1")"
 	: > "$1"
 }
 
-generate_dnsmasq_conf() {
-	mkdir -p "$(dirname "$DNSMASQ_OUT")"
-	"${BINDIR}/trafix2dnsmasq.sh" \
-		-o "$DNSMASQ_OUT" \
-		-p 6053 \
-		-s trafix,trafix6 \
-		--extra-domain-file "$NAMES_CONF"
+resolve_config_file() {
+	config_file="${TRAFIX_CONFIG:-}"
+	if [ -z "$config_file" ] && command -v uci >/dev/null 2>&1; then
+		config_file="$(uci -q get trafix.general.config_file 2>/dev/null)"
+	fi
+	if [ -z "$config_file" ]; then
+		if [ -f "$DEFAULT_CONFIG_FILE" ]; then
+			config_file="$DEFAULT_CONFIG_FILE"
+		elif [ -f "$LEGACY_CONFIG_FILE" ]; then
+			config_file="$LEGACY_CONFIG_FILE"
+		else
+			config_file="$DEFAULT_CONFIG_FILE"
+		fi
+	fi
+	echo "$config_file"
 }
 
-process_rule() {
-	content="$1"
-	key="$(echo "$content" | cut -d ',' -f 1)"
-	arg="$(echo "$content" | cut -d ',' -f 2-)"
+prepare_workspace() {
+	mkdir -p "$STATE_DIR" "$RULESET_CACHE_DIR"
+	TMP_DIR="$(mktemp -d /tmp/trafix.XXXXXX)" || fail "failed to create temp dir"
+	CONFIG_JSON="$TMP_DIR/config.json"
+	COMPILED_MATCHES="$TMP_DIR/compiled-matches.tsv"
+	EXPANDED_MATCHES="$TMP_DIR/expanded-matches.tsv"
+	: > "$COMPILED_MATCHES"
+	: > "$EXPANDED_MATCHES"
+}
+
+load_config_json() {
+	CONFIG_FILE="$(resolve_config_file)"
+	[ -f "$CONFIG_FILE" ] || fail "config file not found: $CONFIG_FILE"
+	yq -o=json '.' "$CONFIG_FILE" > "$CONFIG_JSON" || fail "failed to parse $CONFIG_FILE"
+}
+
+is_legacy_config() {
+	jq -e 'has("remoteRules") or has("rules") or has("names")' "$CONFIG_JSON" >/dev/null 2>&1
+}
+
+validate_final_action() {
+	final_action="$1"
+	case "$final_action" in
+		proxy|bypass)
+			return 0
+			;;
+		*)
+			fail "unsupported final_action '$final_action', only 'proxy' and 'bypass' are supported"
+			;;
+	esac
+}
+
+matcher_key_count() {
+	printf '%s' "$1" | jq '[has("rule_set"),has("domain"),has("domain_suffix"),has("ip_cidr"),has("ip6_cidr")] | map(select(.)) | length'
+}
+
+append_match_json() {
+	json="$1"
+	printf '%s' "$json" | jq -r '
+		if has("domain") then .domain[]? | "domain\t" + .
+		elif has("domain_suffix") then .domain_suffix[]? | "domain_suffix\t" + .
+		elif has("ip_cidr") then .ip_cidr[]? | "ip_cidr\t" + .
+		elif has("ip6_cidr") then .ip6_cidr[]? | "ip6_cidr\t" + .
+		else empty end
+	' >> "$2"
+}
+
+append_payload_line() {
+	line="$1"
+	out_file="$2"
+	key="${line%%,*}"
+	arg="${line#*,}"
+	[ "$key" = "$line" ] && return 0
 	case "$key" in
-		DOMAIN|DOMAIN-SUFFIX)
-			echo "$arg" >> "$NAMES_CONF"
+		DOMAIN)
+			printf 'domain\t%s\n' "$arg" >> "$out_file"
+			;;
+		DOMAIN-SUFFIX)
+			printf 'domain_suffix\t%s\n' "$arg" >> "$out_file"
 			;;
 		IP-CIDR)
-			echo "$arg" >> "$PROXY_IPSET_CONF"
+			printf 'ip_cidr\t%s\n' "${arg%%,*}" >> "$out_file"
 			;;
 		IP-CIDR6)
-			echo "$arg" >> "$PROXY_IP6SET_CONF"
+			printf 'ip6_cidr\t%s\n' "${arg%%,*}" >> "$out_file"
 			;;
 		'')
 			;;
 		*)
-			err "unknown keyword $key"
+			err "skip unsupported payload matcher: $line"
+			;;
+	esac
+}
+
+fetch_rule_set_source() {
+	type="$1"
+	location="$2"
+	out_file="$3"
+	case "$type" in
+		local)
+			[ -f "$location" ] || fail "rule set source not found: $location"
+			cp "$location" "$out_file"
+			;;
+		remote)
+			curl -fsSL "$location" -o "$out_file" || fail "failed to download rule set: $location"
+			;;
+		*)
+			fail "unsupported rule set source type: $type"
+			;;
+	esac
+}
+
+build_rule_set() {
+	tag="$1"
+	out_file="$RULESET_CACHE_DIR/$tag.tsv"
+	[ -f "$out_file" ] && return 0
+	: > "$out_file"
+
+	rule_set_json="$(jq -c --arg tag "$tag" '.rule_sets[]? | select(.tag == $tag)' "$CONFIG_JSON")"
+	[ -n "$rule_set_json" ] || fail "undefined rule_set tag: $tag"
+
+	type="$(printf '%s' "$rule_set_json" | jq -r '.type // empty')"
+	format="$(printf '%s' "$rule_set_json" | jq -r '.format // "trafix"')"
+
+	case "$type" in
+		inline)
+			printf '%s' "$rule_set_json" | jq -c '.match[]? | select(.enabled != false)' | while IFS= read -r matcher_json; do
+				[ "$(matcher_key_count "$matcher_json")" -eq 1 ] || fail "rule_set '$tag' contains a matcher with invalid key count"
+				append_match_json "$matcher_json" "$out_file"
+			done
+			;;
+		local|remote)
+			source_file="$TMP_DIR/$tag.source"
+			location_key=path
+			[ "$type" = remote ] && location_key=url
+			location="$(printf '%s' "$rule_set_json" | jq -r --arg key "$location_key" '.[$key] // empty')"
+			[ -n "$location" ] || fail "rule_set '$tag' missing $location_key"
+			fetch_rule_set_source "$type" "$location" "$source_file"
+			case "$format" in
+				trafix|yaml)
+					yq -o=json '.' "$source_file" | jq -c '.match[]? | select(.enabled != false)' | while IFS= read -r matcher_json; do
+						[ "$(matcher_key_count "$matcher_json")" -eq 1 ] || fail "rule_set '$tag' source contains a matcher with invalid key count"
+						append_match_json "$matcher_json" "$out_file"
+					done
+					;;
+				payload|clash)
+					yq -r '.payload[]? // empty' "$source_file" | while IFS= read -r payload_line; do
+						append_payload_line "$payload_line" "$out_file"
+					done
+					;;
+				*)
+					fail "unsupported rule_set format '$format' for tag '$tag'"
+					;;
+			esac
+			;;
+		*)
+			fail "unsupported rule_set type '$type' for tag '$tag'"
+			;;
+	esac
+}
+
+append_compiled_match() {
+	type="$1"
+	value="$2"
+	action="$3"
+	printf '%s\t%s\t%s\n' "$type" "$value" "$action" >> "$COMPILED_MATCHES"
+}
+
+expand_rule_set_matches() {
+	action="$1"
+	shift
+	for tag in "$@"; do
+		build_rule_set "$tag"
+		while IFS="$(printf '\t')" read -r matcher_type matcher_value; do
+			[ -n "$matcher_type" ] || continue
+			append_compiled_match "$matcher_type" "$matcher_value" "$action"
+		done < "$RULESET_CACHE_DIR/$tag.tsv"
+	done
+}
+
+compile_new_config() {
+	final_action="$(jq -r '.final_action // "bypass"' "$CONFIG_JSON")"
+	validate_final_action "$final_action"
+
+	jq -c '.route_rules[]? | select(.enabled != false)' "$CONFIG_JSON" | while IFS= read -r route_rule; do
+		[ "$(matcher_key_count "$route_rule")" -eq 1 ] || fail "each route_rule must define exactly one matcher type"
+		action="$(printf '%s' "$route_rule" | jq -r '.action // empty')"
+		case "$action" in
+			proxy|bypass|block)
+				;;
+			*)
+				fail "unsupported route_rule action '$action'"
+				;;
+		esac
+
+		if printf '%s' "$route_rule" | jq -e 'has("rule_set")' >/dev/null 2>&1; then
+			tags="$(printf '%s' "$route_rule" | jq -r '.rule_set[]?')"
+			[ -n "$tags" ] || fail "route_rule rule_set matcher requires at least one tag"
+			# shellcheck disable=SC2086
+			expand_rule_set_matches "$action" $tags
+		else
+			printf '%s' "$route_rule" | jq -r --arg action "$action" '
+				if has("domain") then .domain[]? | "domain\t" + . + "\t" + $action
+				elif has("domain_suffix") then .domain_suffix[]? | "domain_suffix\t" + . + "\t" + $action
+				elif has("ip_cidr") then .ip_cidr[]? | "ip_cidr\t" + . + "\t" + $action
+				elif has("ip6_cidr") then .ip6_cidr[]? | "ip6_cidr\t" + . + "\t" + $action
+				else empty end
+			' >> "$COMPILED_MATCHES"
+		fi
+	done
+
+	awk -F '\t' '!seen[$1 FS $2]++ { print }' "$COMPILED_MATCHES" > "$EXPANDED_MATCHES"
+	printf 'FINAL_ACTION=%s\n' "$final_action" > "$RUNTIME_ENV"
+}
+
+compile_legacy_config() {
+	printf 'FINAL_ACTION=bypass\n' > "$RUNTIME_ENV"
+
+	for url in $(yq -r '.remoteRules[]?.url // empty' "$CONFIG_FILE"); do
+		log "processing legacy remote rule source $url"
+		curl -fsSL "$url" | yq -r '.payload[]? // empty' | while IFS= read -r payload_line; do
+			legacy_tmp="$TMP_DIR/legacy.$$"
+			: > "$legacy_tmp"
+			append_payload_line "$payload_line" "$legacy_tmp"
+			while IFS="$(printf '\t')" read -r matcher_type matcher_value; do
+				[ -n "$matcher_type" ] && append_compiled_match "$matcher_type" "$matcher_value" proxy
+			done < "$legacy_tmp"
+			rm -f "$legacy_tmp"
+			done
+	done
+
+	for path in $(yq -r '.rules[]?.path // empty' "$CONFIG_FILE"); do
+		log "processing legacy local rule source $path"
+		yq -r '.payload[]? // empty' "$path" | while IFS= read -r payload_line; do
+			legacy_tmp="$TMP_DIR/legacy.$$"
+			: > "$legacy_tmp"
+			append_payload_line "$payload_line" "$legacy_tmp"
+			while IFS="$(printf '\t')" read -r matcher_type matcher_value; do
+				[ -n "$matcher_type" ] && append_compiled_match "$matcher_type" "$matcher_value" proxy
+			done < "$legacy_tmp"
+			rm -f "$legacy_tmp"
+			done
+	done
+
+	for name in $(yq -r '.names[]? // empty' "$CONFIG_FILE"); do
+		append_compiled_match domain_suffix "$name" proxy
+	done
+
+	awk -F '\t' '!seen[$1 FS $2]++ { print }' "$COMPILED_MATCHES" > "$EXPANDED_MATCHES"
+}
+
+is_ipv4_single() {
+	case "$1" in
+		*/*)
+			[ "${1#*/}" = "32" ]
+			;;
+		*)
+			return 0
+			;;
+	esac
+}
+
+is_ipv6_single() {
+	case "$1" in
+		*/*)
+			[ "${1#*/}" = "128" ]
+			;;
+		*)
+			return 0
+			;;
+	esac
+}
+
+materialize_lists() {
+	for file in \
+		"$PROXY_DOMAIN_LIST" "$BYPASS_DOMAIN_LIST" "$BLOCK_DOMAIN_LIST" \
+		"$PROXY_IPSET_CONF" "$PROXY_IPSET_NET_CONF" "$PROXY_IP6SET_CONF" "$PROXY_IP6SET_NET_CONF" \
+		"$BYPASS_IPSET_CONF" "$BYPASS_IPSET_NET_CONF" "$BYPASS_IP6SET_CONF" "$BYPASS_IP6SET_NET_CONF" \
+		"$BLOCK_IPSET_CONF" "$BLOCK_IPSET_NET_CONF" "$BLOCK_IP6SET_CONF" "$BLOCK_IP6SET_NET_CONF"; do
+		reset_conf "$file"
+	done
+
+	while IFS="$(printf '\t')" read -r matcher_type matcher_value action; do
+		[ -n "$matcher_type" ] || continue
+		case "$action:$matcher_type" in
+			proxy:domain|proxy:domain_suffix)
+				printf '%s\n' "$matcher_value" >> "$PROXY_DOMAIN_LIST"
+				;;
+			bypass:domain|bypass:domain_suffix)
+				printf '%s\n' "$matcher_value" >> "$BYPASS_DOMAIN_LIST"
+				;;
+			block:domain|block:domain_suffix)
+				printf '%s\n' "$matcher_value" >> "$BLOCK_DOMAIN_LIST"
+				;;
+			proxy:ip_cidr)
+				if is_ipv4_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$PROXY_IPSET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$PROXY_IPSET_NET_CONF"
+				fi
+				;;
+			proxy:ip6_cidr)
+				if is_ipv6_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$PROXY_IP6SET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$PROXY_IP6SET_NET_CONF"
+				fi
+				;;
+			bypass:ip_cidr)
+				if is_ipv4_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$BYPASS_IPSET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$BYPASS_IPSET_NET_CONF"
+				fi
+				;;
+			bypass:ip6_cidr)
+				if is_ipv6_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$BYPASS_IP6SET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$BYPASS_IP6SET_NET_CONF"
+				fi
+				;;
+			block:ip_cidr)
+				if is_ipv4_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$BLOCK_IPSET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$BLOCK_IPSET_NET_CONF"
+				fi
+				;;
+			block:ip6_cidr)
+				if is_ipv6_single "$matcher_value"; then
+					printf '%s\n' "$matcher_value" >> "$BLOCK_IP6SET_CONF"
+				else
+					printf '%s\n' "$matcher_value" >> "$BLOCK_IP6SET_NET_CONF"
+				fi
+				;;
+			*)
+				err "skip unsupported compiled matcher: $action $matcher_type $matcher_value"
+				;;
+		esac
+	done < "$EXPANDED_MATCHES"
+
+	for file in \
+		"$PROXY_DOMAIN_LIST" "$BYPASS_DOMAIN_LIST" "$BLOCK_DOMAIN_LIST" \
+		"$PROXY_IPSET_CONF" "$PROXY_IPSET_NET_CONF" "$PROXY_IP6SET_CONF" "$PROXY_IP6SET_NET_CONF" \
+		"$BYPASS_IPSET_CONF" "$BYPASS_IPSET_NET_CONF" "$BYPASS_IP6SET_CONF" "$BYPASS_IP6SET_NET_CONF" \
+		"$BLOCK_IPSET_CONF" "$BLOCK_IPSET_NET_CONF" "$BLOCK_IP6SET_CONF" "$BLOCK_IP6SET_NET_CONF"; do
+		if [ -s "$file" ]; then
+			sort -u "$file" -o "$file"
+		fi
+	done
+}
+
+generate_dnsmasq_conf() {
+	reset_conf "$DNSMASQ_OUT"
+	mkdir -p "$(dirname "$DNSMASQ_OUT")"
+	. "$RUNTIME_ENV"
+
+	{
+		echo '# dnsmasq rules generated by trafix'
+		echo "# Last Updated on $(date '+%Y-%m-%d %H:%M:%S')"
+		echo '#'
+	} >> "$DNSMASQ_OUT"
+
+	while IFS= read -r domain; do
+		[ -n "$domain" ] || continue
+		printf 'address=/%s/0.0.0.0\n' "$domain" >> "$DNSMASQ_OUT"
+		printf 'address=/%s/::\n' "$domain" >> "$DNSMASQ_OUT"
+	done < "$BLOCK_DOMAIN_LIST"
+
+	case "$FINAL_ACTION" in
+		bypass)
+			while IFS= read -r domain; do
+				[ -n "$domain" ] || continue
+				printf 'server=/%s/%s#%s\n' "$domain" "$DNS_SERVER" "$DNS_PORT" >> "$DNSMASQ_OUT"
+				printf 'ipset=/%s/trafix,trafix6\n' "$domain" >> "$DNSMASQ_OUT"
+			done < "$PROXY_DOMAIN_LIST"
+			;;
+		proxy)
+			while IFS= read -r domain; do
+				[ -n "$domain" ] || continue
+				printf 'ipset=/%s/trafix-bypass,trafix6-bypass\n' "$domain" >> "$DNSMASQ_OUT"
+			done < "$BYPASS_DOMAIN_LIST"
 			;;
 	esac
 }
 
 update() {
-	reset_conf "$NAMES_CONF"
-	reset_conf "$PROXY_IPSET_CONF"
-	reset_conf "$PROXY_IP6SET_CONF"
-
-	for url in $(yq -r '.remoteRules[]?.url // empty' "$CONF_PATH"); do
-		log "processing $url"
-		for rule in $(curl -fsSL "$url" | yq -r '.payload[]? // empty'); do
-			process_rule "$rule"
-		done
-	done
-
-	for path in $(yq -r '.rules[]?.path // empty' "$CONF_PATH"); do
-		log "processing $path"
-		for rule in $(yq -r '.payload[]? // empty' "$path"); do
-			process_rule "$rule"
-		done
-	done
-
-	for name in $(yq -r '.names[]? // empty' "$CONF_PATH"); do
-		echo "$name" >> "$NAMES_CONF"
-	done
-
+	validate_dependencies
+	prepare_workspace
+	load_config_json
+	if is_legacy_config; then
+		log "detected legacy trafix config schema, compiling in compatibility mode"
+		compile_legacy_config
+	else
+		compile_new_config
+	fi
+	materialize_lists
 	generate_dnsmasq_conf
 }
 

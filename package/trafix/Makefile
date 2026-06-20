@@ -12,26 +12,18 @@ include $(INCLUDE_DIR)/package.mk
 define Package/trafix
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=GFW list based dnsmasq/ipset redirect helper
+  TITLE:=Rule-based dnsmasq/ipset redirect helper
   DEPENDS:=+curl +jq +yq +bind-dig +dnsmasq-full +ipset
 endef
 
 define Package/trafix/description
- A small OpenWrt helper package that generates dnsmasq/ipset rules from
- local or remote rule files and installs iptables/ip6tables redirect rules.
+ A small OpenWrt helper package that compiles rule_sets and route_rules into
+ dnsmasq/ipset data and installs iptables/ip6tables redirect rules.
 endef
 
 define Package/trafix/conffiles
 /etc/config/trafix
-/etc/trafix/trafix.yaml
-/etc/trafix/bypass-ipset.conf
-/etc/trafix/bypass-ipset-net.conf
-/etc/trafix/bypass-ip6set.conf
-/etc/trafix/bypass-ip6set-net.conf
-/etc/trafix/proxy-ipset.conf
-/etc/trafix/proxy-ipset-net.conf
-/etc/trafix/proxy-ip6set.conf
-/etc/trafix/proxy-ip6set-net.conf
+/etc/trafix/config.yaml
 endef
 
 define Build/Compile
