@@ -1,0 +1,23 @@
+rule_sets:
+  - tag: private-and-local
+    type: inline
+    match:
+      - domain_suffix:
+          - lan
+          - local
+      - ip_cidr:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 127.0.0.0/8
+      - ip6_cidr:
+          - fc00::/7
+          - fe80::/10
+          - ::1/128
+
+route_rules:
+  - rule_set:
+      - private-and-local
+    action: bypass
+
+final_action: bypass
