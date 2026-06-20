@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   prepare-matrix:
@@ -41,7 +43,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gawk libncurses5-dev libncursesw5-dev file rsync unzip wget zlib1g-dev python3-distutils
+          sudo apt-get install -y arj binutils build-essential gawk libncurses5-dev libncursesw5-dev file rsync unzip wget zlib1g-dev python3-distutils
 
       - name: Build package
         env:
@@ -56,7 +58,7 @@ jobs:
           path: dist/${{ matrix.name }}/*
           if-no-files-found: error
 
-  publish:
+  publish_release:
     needs: build
     runs-on: ubuntu-22.04
     steps:
@@ -83,3 +85,38 @@ jobs:
           prerelease: false
           files: release-files/*
           generate_release_notes: true
+
+  publish_feed:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: feed-artifacts
+          merge-multiple: false
+
+      - name: Build feed index
+        run: |
+          python3 scripts/build-openwrt-feed.py \
+            --artifacts-dir feed-artifacts \
+            --output-dir site
+          find site -maxdepth 2 -type f | sort
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
