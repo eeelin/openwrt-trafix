@@ -18,10 +18,27 @@ SDK_URL=https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-sd
 
 Build artifacts are written to `dist/`.
 
+## OpenWrt package feed
+
+Release tags also publish a simple OpenWrt package feed to GitHub Pages.
+
+Feed URLs:
+
+- `aarch64_generic`: `https://eeelin.github.io/openwrt-trafix/aarch64_generic`
+- `x86_64`: `https://eeelin.github.io/openwrt-trafix/x86_64`
+
+Example for NanoPi R5C (`aarch64_generic`):
+
+```sh
+echo 'src/gz trafix https://eeelin.github.io/openwrt-trafix/aarch64_generic' >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install trafix
+```
+
 ## GitHub Actions
 
 - `.github/workflows/build.yml`: validates scripts and builds the package on push, pull request, and manual trigger.
-- `.github/workflows/release.yml`: builds and publishes release assets when a tag matching `v*` is pushed.
+- `.github/workflows/release.yml`: builds release assets, publishes a GitHub Release, and updates the GitHub Pages OpenWrt feed when a tag matching `v*` is pushed.
 - `.github/openwrt-sdk-matrix.json`: editable SDK build matrix used by both workflows.
 
 
