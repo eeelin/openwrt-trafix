@@ -29,6 +29,23 @@ Currently supported matcher types in `route_rules` are:
 
 Generated runtime artifacts are written under `/var/trafix/`.
 
+## Dry run
+
+To review the ipset / iptables / ip6tables commands without applying them on the router:
+
+```sh
+/etc/init.d/trafix dryrun_start
+/etc/init.d/trafix dryrun_stop
+/etc/init.d/trafix dryrun_restart
+```
+
+You can also use the standard actions with an environment flag:
+
+```sh
+TRAFIX_DRY_RUN=1 /etc/init.d/trafix start
+TRAFIX_DRY_RUN=1 /etc/init.d/trafix stop
+```
+
 ## Build inside OpenWrt SDK / tree
 
 Put this directory under:
