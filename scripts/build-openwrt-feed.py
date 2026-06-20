@@ -6,24 +6,40 @@ import io
 import os
 import pathlib
 import shutil
-import subprocess
 import tarfile
 from collections import defaultdict
 
 
-def read_control_fields(ipk_path: pathlib.Path) -> dict:
-    members = subprocess.check_output(["ar", "t", str(ipk_path)], text=True).splitlines()
-    control_member = None
-    for candidate in ("control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"):  # pragma: no branch
-        if candidate in members:
-            control_member = candidate
-            break
-    if control_member is None:
-        raise RuntimeError(f"control archive not found in {ipk_path}")
+def open_inner_tar_from_ipk(ipk_path: pathlib.Path, candidate_names):
+    with ipk_path.open("rb") as f:
+        magic = f.read(8)
 
-    control_bytes = subprocess.check_output(["ar", "p", str(ipk_path), control_member])
-    mode = "r:*"
-    with tarfile.open(fileobj=io.BytesIO(control_bytes), mode=mode) as tf:
+    if magic.startswith(b"\x1f\x8b"):
+        with tarfile.open(ipk_path, mode="r:gz") as ipk_tf:
+            for member in ipk_tf.getmembers():
+                name = member.name.lstrip("./")
+                if name in candidate_names:
+                    return ipk_tf.extractfile(member).read()
+        raise RuntimeError(f"inner tar {candidate_names} not found in {ipk_path}")
+
+    if magic == b"!<arch>\n":
+        import subprocess
+
+        members = subprocess.check_output(["ar", "t", str(ipk_path)], text=True).splitlines()
+        for candidate in candidate_names:
+            if candidate in members:
+                return subprocess.check_output(["ar", "p", str(ipk_path), candidate])
+        raise RuntimeError(f"inner tar {candidate_names} not found in {ipk_path}")
+
+    raise RuntimeError(f"unsupported ipk format: {ipk_path}")
+
+
+def read_control_fields(ipk_path: pathlib.Path) -> dict:
+    control_bytes = open_inner_tar_from_ipk(
+        ipk_path,
+        ("control.tar.gz", "control.tar.xz", "control.tar.zst", "control.tar"),
+    )
+    with tarfile.open(fileobj=io.BytesIO(control_bytes), mode="r:*") as tf:
         control_info = None
         for member in tf.getmembers():
             name = member.name.lstrip("./")
