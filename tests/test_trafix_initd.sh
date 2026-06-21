@@ -247,8 +247,90 @@ run_dryrun_proxy_test() {
 	rm -rf "$tmpdir"
 }
 
+run_dryrun_stop_test() {
+	local tmpdir output
+	tmpdir="$(mktemp -d)"
+	mkdir -p "$tmpdir/state"
+
+	output="$(bash -c '
+		source "'"$SCRIPT_PATH"'"
+		STATE_DIR="'"$tmpdir"'/state"
+		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		dryrun_stop
+	')"
+
+	assert_contains "$output" '# dry-run stop'
+	assert_contains "$output" '+ iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null'
+	assert_contains "$output" '+ iptables -t nat -F TRAFIX 2>/dev/null'
+	assert_contains "$output" '+ ip6tables -t nat -D OUTPUT -j TRAFIX 2>/dev/null'
+	assert_contains "$output" '+ ip6tables -X TRAFIX_FILTER 2>/dev/null'
+
+	rm -rf "$tmpdir"
+}
+
+run_dryrun_restart_test() {
+	local tmpdir output
+	tmpdir="$(mktemp -d)"
+	mkdir -p "$tmpdir/state"
+	printf 'FINAL_ACTION=proxy\n' >"$tmpdir/state/runtime.env"
+
+	output="$(bash -c '
+		config_load() { :; }
+		config_get() {
+			case "$2/$3" in
+				general/redir_ipv4_port) printf -v "$1" "%s" "12345" ;;
+				general/redir_ipv6_port) printf -v "$1" "%s" "23456" ;;
+				*) printf -v "$1" "%s" "" ;;
+			esac
+		}
+		config_get_bool() { printf -v "$1" "%s" "0"; }
+		source "'"$SCRIPT_PATH"'"
+		STATE_DIR="'"$tmpdir"'/state"
+		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		dryrun_restart
+	')"
+
+	assert_contains "$output" '# dry-run restart (FINAL_ACTION=proxy)'
+	assert_contains "$output" '+ iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null'
+	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
+	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "23456"'
+
+	rm -rf "$tmpdir"
+}
+
+run_dryrun_default_action_test() {
+	local tmpdir output
+	tmpdir="$(mktemp -d)"
+	mkdir -p "$tmpdir/state"
+
+	output="$(bash -c '
+		config_load() { :; }
+		config_get() {
+			case "$2/$3" in
+				general/redir_ipv4_port) printf -v "$1" "%s" "12345" ;;
+				general/redir_ipv6_port) printf -v "$1" "%s" "23456" ;;
+				*) printf -v "$1" "%s" "" ;;
+			esac
+		}
+		config_get_bool() { printf -v "$1" "%s" "0"; }
+		source "'"$SCRIPT_PATH"'"
+		STATE_DIR="'"$tmpdir"'/state"
+		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		dryrun_start
+	')"
+
+	assert_contains "$output" '# dry-run start (FINAL_ACTION=bypass)'
+	assert_contains "$output" '--match-set trafix dst -j REDIRECT --to-ports "12345"'
+	assert_not_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
+
+	rm -rf "$tmpdir"
+}
+
 run_dns_check_test
 run_dryrun_bypass_test
 run_dryrun_proxy_test
+run_dryrun_stop_test
+run_dryrun_restart_test
+run_dryrun_default_action_test
 
 echo "All trafix init.d tests passed."
