@@ -82,7 +82,7 @@ test_dns() {
 		return 0
 	}
 	for family in ipv4 ipv6; do
-		yq -r ".status_tests.dns.${family}[]? // empty" "$config_file" 2>/dev/null | while IFS= read -r domain; do
+		yq -r "(.status_tests.dns.${family} // [])[]" "$config_file" 2>/dev/null | while IFS= read -r domain; do
 			[ -n "$domain" ] && test_dns_domain "$family" "$domain"
 		done
 	done

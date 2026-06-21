@@ -24,7 +24,11 @@ jobs:
           sh -n package/trafix/files/etc/init.d/trafix
           sh -n package/trafix/files/usr/bin/trafix
           sh -n package/trafix/files/usr/bin/trafix2dnsmasq.sh
+          bash -n tests/test_trafix_initd.sh
           python3 -m py_compile scripts/build-openwrt-feed.py
+
+      - name: Run init.d regression tests
+        run: bash tests/test_trafix_initd.sh
 
   prepare-matrix:
     runs-on: ubuntu-22.04
