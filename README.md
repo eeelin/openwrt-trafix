@@ -13,10 +13,11 @@ SDK_DIR=/path/to/openwrt-sdk ./build.sh
 Or let the script download an SDK archive automatically:
 
 ```sh
-SDK_URL=https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-sdk-22.03.5-x86-64_gcc-11.2.0_musl.Linux-x86_64.tar.xz ./build.sh
+SDK_URL=https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst ./build.sh
 ```
 
-Build artifacts are written to `dist/`.
+Build artifacts are written to `dist/`. OpenWrt 24.10 and older SDKs produce
+`.ipk` packages; OpenWrt 25.12 and newer SDKs produce `.apk` packages.
 
 ## OpenWrt package feed
 
@@ -35,6 +36,13 @@ opkg update
 opkg install trafix
 ```
 
+OpenWrt 25.12 switched from `opkg` to `apk`. Install a locally built 25.12
+artifact with:
+
+```sh
+apk add --allow-untrusted ./trafix-*.apk
+```
+
 ## GitHub Actions
 
 - `.github/workflows/build.yml`: validates scripts, builds the package, and publishes the GitHub Pages OpenWrt feed on pushes to `main`.
@@ -42,4 +50,5 @@ opkg install trafix
 - `.github/openwrt-sdk-matrix.json`: editable SDK build matrix used by both workflows.
 
 
-Default CI targets currently prefer OpenWrt 22.03.5 and are trimmed to `x86-64` plus NanoPi R5C matching `rockchip/armv8`.
+Default CI targets build OpenWrt 22.03.5 and OpenWrt 25.12.5 for `x86-64`
+plus NanoPi R5C-compatible `rockchip/armv8`.

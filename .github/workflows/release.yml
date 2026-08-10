@@ -43,7 +43,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y arj binutils build-essential gawk libncurses5-dev libncursesw5-dev file rsync unzip wget zlib1g-dev python3-distutils
+          sudo apt-get install -y arj binutils build-essential gawk libncurses5-dev libncursesw5-dev file rsync unzip wget zlib1g-dev python3-distutils zstd
 
       - name: Build package
         env:
@@ -75,7 +75,7 @@ jobs:
             target=$(basename "$(dirname "$file")")
             base=$(basename "$file")
             cp "$file" "release-files/${target}-${base}"
-          done < <(find release-artifacts -type f \( -name '*.ipk' -o -name 'sha256sums.txt' \) | sort)
+          done < <(find release-artifacts -type f \( -name '*.ipk' -o -name '*.apk' -o -name 'sha256sums.txt' \) | sort)
           ls -lah release-files
 
       - name: Publish GitHub release
