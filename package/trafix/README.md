@@ -78,12 +78,21 @@ Then run:
 make package/trafix/compile V=s
 ```
 
-The generated `.ipk` will be placed under `bin/packages/...`.
+The generated package will be placed under `bin/packages/...`: `.ipk` for
+OpenWrt 24.10 and older, `.apk` for OpenWrt 25.12 and newer.
 
 ## Install on router
 
 ```sh
 opkg install trafix_1.0.0-1_*.ipk
+/etc/init.d/trafix enable
+/etc/init.d/trafix start
+```
+
+On OpenWrt 25.12 or newer:
+
+```sh
+apk add --allow-untrusted ./trafix-*.apk
 /etc/init.d/trafix enable
 /etc/init.d/trafix start
 ```

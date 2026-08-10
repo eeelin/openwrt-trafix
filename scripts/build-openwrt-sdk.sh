@@ -23,7 +23,7 @@ Usage:
 Environment variables:
   PACKAGE_NAME   Package name to build (default: trafix)
   PACKAGE_DIR    Package directory (default: ./package/<PACKAGE_NAME>)
-  SDK_URL        OpenWrt SDK archive URL to download and use
+  SDK_URL        OpenWrt SDK archive URL to download and use (.tar.xz/.tar.zst supported)
   SDK_DIR        Existing OpenWrt SDK directory to reuse
   WORK_DIR       Working directory for SDK/download cache (default: ./.work)
   DOWNLOAD_DIR   SDK archive cache directory (default: ./.work/downloads)
@@ -33,8 +33,8 @@ Environment variables:
   FEEDS_UPDATE   Run feeds update/install before build, 1 or 0 (default: 1)
 
 Examples:
-  SDK_URL=https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-sdk-22.03.5-x86-64_gcc-11.2.0_musl.Linux-x86_64.tar.xz ./build.sh
-  SDK_DIR=$HOME/openwrt-sdk-22.03.5-x86-64 ./build.sh
+  SDK_URL=https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst ./build.sh
+  SDK_DIR=$HOME/openwrt-sdk-25.12.5-x86-64 ./build.sh
 USAGE
 }
 
@@ -71,16 +71,7 @@ prepare_sdk() {
   fi
 
   local extracted_root
-  extracted_root="$(python3 - "$SDK_ARCHIVE" <<'PY'
-import sys, tarfile
-with tarfile.open(sys.argv[1], 'r:*') as tf:
-    for member in tf:
-        name = member.name.split('/', 1)[0]
-        if name:
-            print(name)
-            break
-PY
-)"
+  extracted_root="$(tar -tf "$SDK_ARCHIVE" | awk -F/ 'NF { print $1; exit }')"
   [[ -n "$extracted_root" ]] || fail "unable to determine SDK archive root from $SDK_ARCHIVE"
 
   SDK_DIR="$WORK_DIR/$extracted_root"
@@ -126,18 +117,24 @@ build_package() {
 
 collect_artifacts() {
   mkdir -p "$ARTIFACT_DIR"
-  find "$ARTIFACT_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name 'sha256sums.txt' \) -delete
+  find "$ARTIFACT_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name 'sha256sums.txt' \) -delete
 
-  mapfile -t ipks < <(find "$SDK_DIR/bin/packages" -type f -name "${PACKAGE_NAME}_*.ipk" | sort)
-  [[ ${#ipks[@]} -gt 0 ]] || fail "no ipk artifacts found for $PACKAGE_NAME"
+  mapfile -t packages < <(
+    find "$SDK_DIR/bin/packages" -type f \
+      \( -name "${PACKAGE_NAME}_*.ipk" -o -name "${PACKAGE_NAME}-*.apk" -o -name "${PACKAGE_NAME}_*.apk" \) \
+      | sort
+  )
+  [[ ${#packages[@]} -gt 0 ]] || fail "no package artifacts found for $PACKAGE_NAME (.ipk/.apk)"
 
-  for ipk in "${ipks[@]}"; do
-    cp "$ipk" "$ARTIFACT_DIR/"
+  for package in "${packages[@]}"; do
+    cp "$package" "$ARTIFACT_DIR/"
   done
 
   (
     cd "$ARTIFACT_DIR"
-    sha256sum ./*.ipk > sha256sums.txt
+    find . -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 \
+      | sort -z \
+      | xargs -0 sha256sum > sha256sums.txt
   )
 
   log "artifacts written to $ARTIFACT_DIR"
