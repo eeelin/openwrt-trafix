@@ -71,7 +71,10 @@ prepare_sdk() {
   fi
 
   local extracted_root
-  extracted_root="$(tar -tf "$SDK_ARCHIVE" | awk -F/ 'NF { print $1; exit }')"
+  # Consume the full tar listing instead of exiting awk after the first entry.
+  # With pipefail enabled, an early exit closes the pipe and makes tar fail with
+  # "stdout: write error" for large archives.
+  extracted_root="$(tar -tf "$SDK_ARCHIVE" | awk -F/ 'NF && !found { print $1; found = 1 }')"
   [[ -n "$extracted_root" ]] || fail "unable to determine SDK archive root from $SDK_ARCHIVE"
 
   SDK_DIR="$WORK_DIR/$extracted_root"
