@@ -5,7 +5,7 @@ STOP=60
 
 USE_PROCD=0
 EXTRA_COMMANDS="check dryrun_start dryrun_stop dryrun_restart"
-EXTRA_HELP="        status          Print current network status\n\
+EXTRA_HELP="        check           Print current network status\n\
 \t    dryrun_start    Print commands that would be executed during start\n\
 \t    dryrun_stop     Print commands that would be executed during stop\n\
 \t    dryrun_restart  Print commands that would be executed during restart"
