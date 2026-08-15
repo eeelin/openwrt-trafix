@@ -32,6 +32,7 @@ BLOCK_IP6SET_NET_CONF="$STATE_DIR/block-ip6set-net.conf"
 
 TMP_DIR=
 CONFIG_FILE=
+CONFIG_DIR=
 CONFIG_JSON=
 COMPILED_MATCHES=
 EXPANDED_MATCHES=
@@ -97,6 +98,8 @@ prepare_workspace() {
 load_config_json() {
 	CONFIG_FILE="$(resolve_config_file)"
 	[ -f "$CONFIG_FILE" ] || fail "config file not found: $CONFIG_FILE"
+	CONFIG_FILE="$(cd "$(dirname "$CONFIG_FILE")" && pwd)/$(basename "$CONFIG_FILE")"
+	CONFIG_DIR="$(dirname "$CONFIG_FILE")"
 	yq -o=json '.' "$CONFIG_FILE" > "$CONFIG_JSON" || fail "failed to parse $CONFIG_FILE"
 }
 
@@ -158,14 +161,18 @@ append_payload_line() {
 }
 
 fetch_rule_set_source() {
-	local type location out_file
+	local type location out_file source_path
 	type="$1"
 	location="$2"
 	out_file="$3"
 	case "$type" in
 		local)
-			[ -f "$location" ] || fail "rule set source not found: $location"
-			cp "$location" "$out_file"
+			case "$location" in
+				/*) source_path="$location" ;;
+				*) source_path="$CONFIG_DIR/$location" ;;
+			esac
+			[ -f "$source_path" ] || fail "rule set source not found: $source_path"
+			cp "$source_path" "$out_file"
 			;;
 		remote)
 			curl -fsSL "$location" -o "$out_file" || fail "failed to download rule set: $location"

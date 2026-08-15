@@ -101,10 +101,17 @@ test_local_yaml_and_payload_rule_sets() {
 	local work
 	work="$(mktemp -d)"
 	(
-		cd "$ROOT_DIR"
+		# Run outside the repository to prove that local source paths are
+		# resolved relative to the main YAML file, not the caller's cwd.
+		cd "$work"
 		run_update "$FIXTURES/trafix-local-sources.yaml" "$work"
 	)
 
+	assert_file_contains "$work/state/rule-set-cache/local-yaml.tsv" $'domain\tmalware.example'
+	assert_file_contains "$work/state/rule-set-cache/local-yaml.tsv" $'ip_cidr\t203.0.113.0/24'
+	assert_file_not_contains "$work/state/rule-set-cache/local-yaml.tsv" $'domain_suffix\tdisabled-source.example'
+	assert_file_contains "$work/state/rule-set-cache/local-payload.tsv" $'domain\tpayload.example'
+	assert_file_contains "$work/state/rule-set-cache/local-payload.tsv" $'ip6_cidr\t2001:db8:3::/64'
 	assert_file_contains "$work/state/block-domain.list" 'malware.example'
 	assert_file_contains "$work/state/block-ipset-net.conf" '203.0.113.0/24'
 	assert_file_not_contains "$work/state/block-domain.list" 'disabled-source.example'
@@ -115,11 +122,36 @@ test_local_yaml_and_payload_rule_sets() {
 	rm -rf "$work"
 }
 
+test_absolute_local_rule_set_path() {
+	local work config
+	work="$(mktemp -d)"
+	config="$work/absolute.yaml"
+	cat >"$config" <<EOF
+rule_sets:
+  - tag: absolute
+    type: local
+    format: yaml
+    path: $FIXTURES/trafix-rules.yaml
+route_rules:
+  - rule_set: [absolute]
+    action: block
+final_action: bypass
+EOF
+	(
+		cd /tmp
+		run_update "$config" "$work"
+	)
+	assert_file_contains "$work/state/block-domain.list" 'malware.example'
+	assert_file_contains "$work/state/block-ipset-net.conf" '203.0.113.0/24'
+	rm -rf "$work"
+}
+
 command -v jq >/dev/null || fail 'jq is required to run config tests'
 python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run config tests'
 
 test_inline_matchers_and_bypass_default
 test_proxy_default_and_disabled_rule
 test_local_yaml_and_payload_rule_sets
+test_absolute_local_rule_set_path
 
 echo 'All trafix YAML configuration tests passed.'
