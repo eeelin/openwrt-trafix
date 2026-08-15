@@ -195,6 +195,11 @@ run_dryrun_bypass_test() {
 	')"
 
 	assert_contains "$output" '# dry-run start (FINAL_ACTION=bypass)'
+	assert_contains "$output" '[trafix/init] starting'
+	assert_contains "$output" '[trafix/init] dry-run: using existing runtime state'
+	assert_contains "$output" '[trafix/init] configuring IPv4 ipsets'
+	assert_contains "$output" '[trafix/init] configuring redirects (IPv4 port: 12345, IPv6 port: 23456)'
+	assert_contains "$output" '[trafix/init] started (final action: bypass)'
 	assert_contains "$output" '+ ipset -q add "trafix" "198.51.100.1"'
 	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "12345"'
 	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "23456"'
@@ -238,6 +243,7 @@ run_dryrun_proxy_test() {
 	')"
 
 	assert_contains "$output" '# dry-run start (FINAL_ACTION=proxy)'
+	assert_contains "$output" '[trafix/init] started (final action: proxy)'
 	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
 	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "23456"'
 	assert_contains "$output" '+ iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP'
@@ -247,8 +253,49 @@ run_dryrun_proxy_test() {
 	rm -rf "$tmpdir"
 }
 
+run_start_updates_state_test() {
+	local tmpdir output
+	tmpdir="$(mktemp -d)"
+	mkdir -p "$tmpdir/state"
+	cat >"$tmpdir/trafix" <<EOF
+#!/bin/sh
+echo "[fake/trafix] update invoked with TRAFIX_CONFIG=\$TRAFIX_CONFIG"
+echo 'FINAL_ACTION=bypass' > "$tmpdir/state/runtime.env"
+EOF
+	chmod +x "$tmpdir/trafix"
+
+	output="$(bash -c '
+		config_load() { :; }
+		config_get() {
+			case "$2/$3" in
+				general/redir_ipv4_port) printf -v "$1" "%s" "12345" ;;
+				general/redir_ipv6_port) printf -v "$1" "%s" "23456" ;;
+			esac
+		}
+		source "'"$SCRIPT_PATH"'"
+		STATE_DIR="'"$tmpdir"'/state"
+		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		TRAFIX_BIN="'"$tmpdir"'/trafix"
+		resolve_config_file() { echo /tmp/test-trafix.yaml; }
+		setup_ipset_ipv4() { :; }
+		setup_ipset_ipv6() { :; }
+		setup_block_filter_ipv4() { :; }
+		setup_block_filter_ipv6() { :; }
+		setup_redir_iptables_ipv4() { :; }
+		setup_redir_iptables_ipv6() { :; }
+		start
+	')"
+
+	assert_contains "$output" '[trafix/init] building runtime state from /tmp/test-trafix.yaml'
+	assert_contains "$output" '[fake/trafix] update invoked with TRAFIX_CONFIG=/tmp/test-trafix.yaml'
+	assert_contains "$output" '[trafix/init] started (final action: bypass)'
+	[[ -f "$tmpdir/state/runtime.env" ]] || fail 'start did not create runtime.env'
+	rm -rf "$tmpdir"
+}
+
 run_dns_check_test
 run_dryrun_bypass_test
 run_dryrun_proxy_test
+run_start_updates_state_test
 
 echo "All trafix init.d tests passed."

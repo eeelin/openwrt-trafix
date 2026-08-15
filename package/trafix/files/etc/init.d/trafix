@@ -14,6 +14,7 @@ STATE_DIR=/var/trafix
 RUNTIME_ENV="$STATE_DIR/runtime.env"
 DRY_RUN="${TRAFIX_DRY_RUN:-0}"
 DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
+TRAFIX_BIN=/usr/bin/trafix
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
 PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
 PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"
@@ -54,6 +55,23 @@ run_cmd() {
 	else
 		eval "$@"
 	fi
+}
+
+service_log() {
+	echo "[trafix/init] $*"
+}
+
+update_runtime_state() {
+	config_file="$(resolve_config_file)"
+	service_log "building runtime state from $config_file"
+	if ! TRAFIX_CONFIG="$config_file" "$TRAFIX_BIN" update; then
+		echo "[trafix/init] ERROR: failed to build runtime state" >&2
+		return 1
+	fi
+	[ -f "$RUNTIME_ENV" ] || {
+		echo "[trafix/init] ERROR: update completed without creating $RUNTIME_ENV" >&2
+		return 1
+	}
 }
 
 test_dns_domain() {
@@ -323,16 +341,29 @@ setup_redir_iptables_ipv6() {
 }
 
 start() {
+	service_log "starting"
+	if [ "$DRY_RUN" != 1 ]; then
+		update_runtime_state || return 1
+	else
+		service_log "dry-run: using existing runtime state"
+	fi
+
 	config_load 'trafix'
 	config_get port4 'general' 'redir_ipv4_port'
 	config_get port6 'general' 'redir_ipv6_port'
 
+	service_log "configuring IPv4 ipsets"
 	setup_ipset_ipv4
+	service_log "configuring IPv6 ipsets"
 	setup_ipset_ipv6
+	service_log "configuring block filters"
 	setup_block_filter_ipv4
 	setup_block_filter_ipv6
+	service_log "configuring redirects (IPv4 port: $port4, IPv6 port: $port6)"
 	setup_redir_iptables_ipv4 "$port4"
 	setup_redir_iptables_ipv6 "$port6"
+	load_runtime_env
+	service_log "started (final action: $FINAL_ACTION)"
 }
 
 cleanup_filter_ipv4() {
@@ -366,8 +397,10 @@ cleanup_redir_iptables_ipv6() {
 }
 
 stop() {
+	service_log "stopping and removing firewall rules"
 	cleanup_redir_iptables_ipv4
 	cleanup_redir_iptables_ipv6
+	service_log "stopped"
 }
 
 dryrun_start() {
