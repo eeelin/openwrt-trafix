@@ -37,7 +37,7 @@ COMPILED_MATCHES=
 EXPANDED_MATCHES=
 
 log() {
-	echo "$@"
+	echo "[trafix] $*"
 }
 
 err() {
@@ -416,12 +416,18 @@ generate_dnsmasq_conf() {
 }
 
 update() {
+	log "validating runtime dependencies"
 	validate_dependencies
+	log "loading configuration: $(resolve_config_file)"
 	prepare_workspace
 	load_config_json
+	log "compiling rule sets and route rules"
 	compile_new_config
+	log "writing runtime rule lists to $STATE_DIR"
 	materialize_lists
+	log "generating dnsmasq configuration: $DNSMASQ_OUT"
 	generate_dnsmasq_conf
+	log "update complete (proxy domains: $(wc -l < "$PROXY_DOMAIN_LIST"), bypass domains: $(wc -l < "$BYPASS_DOMAIN_LIST"), block domains: $(wc -l < "$BLOCK_DOMAIN_LIST"))"
 }
 
 "$@"
