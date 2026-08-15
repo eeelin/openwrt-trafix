@@ -117,17 +117,20 @@ matcher_key_count() {
 }
 
 append_match_json() {
+	local json out_file
 	json="$1"
+	out_file="$2"
 	printf '%s' "$json" | jq -r '
 		if has("domain") then .domain[]? | "domain\t" + .
 		elif has("domain_suffix") then .domain_suffix[]? | "domain_suffix\t" + .
 		elif has("ip_cidr") then .ip_cidr[]? | "ip_cidr\t" + .
 		elif has("ip6_cidr") then .ip6_cidr[]? | "ip6_cidr\t" + .
 		else empty end
-	' >> "$2"
+	' >> "$out_file"
 }
 
 append_payload_line() {
+	local line out_file key arg
 	line="$1"
 	out_file="$2"
 	key="${line%%,*}"
@@ -155,6 +158,7 @@ append_payload_line() {
 }
 
 fetch_rule_set_source() {
+	local type location out_file
 	type="$1"
 	location="$2"
 	out_file="$3"

@@ -1,0 +1,5 @@
+payload:
+  - DOMAIN,payload.example
+  - DOMAIN-SUFFIX,payload-suffix.example
+  - IP-CIDR,198.18.0.0/15,no-resolve
+  - IP-CIDR6,2001:db8:3::/64,no-resolve

@@ -1,0 +1,36 @@
+rule_sets:
+  - tag: inline-mixed
+    type: inline
+    match:
+      - domain:
+          - proxy.example
+      - domain_suffix:
+          - proxy-suffix.example
+      - ip_cidr:
+          - 198.51.100.8
+          - 198.51.100.0/24
+      - ip6_cidr:
+          - 2001:db8::8
+          - 2001:db8::/64
+      - enabled: false
+        domain:
+          - disabled.example
+
+route_rules:
+  - rule_set:
+      - inline-mixed
+    action: proxy
+  - domain:
+      - blocked.example
+    action: block
+  - domain_suffix:
+      - bypass.example
+    action: bypass
+  - ip_cidr:
+      - 203.0.113.7/32
+    action: block
+  - ip6_cidr:
+      - 2001:db8:1::/64
+    action: bypass
+
+final_action: bypass
