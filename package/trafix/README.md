@@ -20,6 +20,10 @@ This directory contains a standard OpenWrt package definition for `trafix`.
 - `status_tests`: configurable `check` command targets for proxy / bypass / DNS checks
 - `final_action`: default route policy (`bypass` or `proxy`)
 
+For a local rule set, an absolute `path` is used as-is. A relative `path` is
+resolved from the directory containing the main `config.yaml`, independently
+of the current working directory.
+
 Currently supported matcher types in `route_rules` are:
 
 - `rule_set`

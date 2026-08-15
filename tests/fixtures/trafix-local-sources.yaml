@@ -2,11 +2,11 @@ rule_sets:
   - tag: local-yaml
     type: local
     format: yaml
-    path: tests/fixtures/trafix-rules.yaml
+    path: trafix-rules.yaml
   - tag: local-payload
     type: local
     format: payload
-    path: tests/fixtures/trafix-payload.yaml
+    path: trafix-payload.yaml
 
 route_rules:
   - rule_set:
