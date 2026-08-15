@@ -1,0 +1,19 @@
+rule_sets:
+  - tag: local-yaml
+    type: local
+    format: yaml
+    path: tests/fixtures/trafix-rules.yaml
+  - tag: local-payload
+    type: local
+    format: payload
+    path: tests/fixtures/trafix-payload.yaml
+
+route_rules:
+  - rule_set:
+      - local-yaml
+    action: block
+  - rule_set:
+      - local-payload
+    action: proxy
+
+final_action: bypass

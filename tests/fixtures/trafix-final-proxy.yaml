@@ -1,0 +1,18 @@
+rule_sets: []
+
+route_rules:
+  - domain:
+      - direct.example
+    action: bypass
+  - domain_suffix:
+      - ignored.example
+    action: block
+    enabled: false
+  - ip_cidr:
+      - 192.0.2.9
+    action: bypass
+  - ip6_cidr:
+      - 2001:db8:2::9/128
+    action: block
+
+final_action: proxy
