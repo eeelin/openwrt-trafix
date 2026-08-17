@@ -146,6 +146,44 @@ EOF
 	rm -rf "$work"
 }
 
+test_update_rebuilds_rule_set_cache() {
+	local work config source
+	work="$(mktemp -d)"
+	config="$work/config.yaml"
+	source="$work/rules.yaml"
+	cat >"$config" <<'EOF'
+rule_sets:
+  - tag: changing
+    type: local
+    format: yaml
+    path: rules.yaml
+route_rules:
+  - rule_set: [changing]
+    action: block
+final_action: bypass
+EOF
+	cat >"$source" <<'EOF'
+match:
+  - domain: [old.example]
+EOF
+
+	run_update "$config" "$work"
+	assert_file_contains "$work/state/rule-set-cache/changing.tsv" $'domain\told.example'
+	assert_file_contains "$work/state/block-domain.list" 'old.example'
+
+	cat >"$source" <<'EOF'
+match:
+  - domain: [new.example]
+EOF
+	run_update "$config" "$work"
+
+	assert_file_contains "$work/state/rule-set-cache/changing.tsv" $'domain\tnew.example'
+	assert_file_not_contains "$work/state/rule-set-cache/changing.tsv" $'domain\told.example'
+	assert_file_contains "$work/state/block-domain.list" 'new.example'
+	assert_file_not_contains "$work/state/block-domain.list" 'old.example'
+	rm -rf "$work"
+}
+
 command -v jq >/dev/null || fail 'jq is required to run config tests'
 python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run config tests'
 
@@ -153,5 +191,6 @@ test_inline_matchers_and_bypass_default
 test_proxy_default_and_disabled_rule
 test_local_yaml_and_payload_rule_sets
 test_absolute_local_rule_set_path
+test_update_rebuilds_rule_set_cache
 
 echo 'All trafix YAML configuration tests passed.'

@@ -87,6 +87,12 @@ resolve_config_file() {
 
 prepare_workspace() {
 	mkdir -p "$STATE_DIR" "$RULESET_CACHE_DIR"
+	# Compiled rule-set entries depend on the current main configuration and
+	# local/remote source contents. Rebuild them on every explicit update so a
+	# same-tag rule set cannot silently reuse stale state.
+	for cache_file in "$RULESET_CACHE_DIR"/*.tsv; do
+		[ -e "$cache_file" ] && rm -f "$cache_file"
+	done
 	TMP_DIR="$(mktemp -d /tmp/trafix.XXXXXX)" || fail "failed to create temp dir"
 	CONFIG_JSON="$TMP_DIR/config.json"
 	COMPILED_MATCHES="$TMP_DIR/compiled-matches.tsv"
