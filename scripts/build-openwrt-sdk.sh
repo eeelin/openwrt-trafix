@@ -10,6 +10,9 @@ ARTIFACT_DIR="${ARTIFACT_DIR:-$ROOT_DIR/dist}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 KEEP_SDK="${KEEP_SDK:-1}"
 FEEDS_UPDATE="${FEEDS_UPDATE:-1}"
+FEEDS_INSTALL_ALL="${FEEDS_INSTALL_ALL:-0}"
+FEED_PACKAGES="${FEED_PACKAGES:-bind jq yq}"
+BUILD_VERBOSE="${BUILD_VERBOSE:-0}"
 SDK_URL="${SDK_URL:-}"
 SDK_DIR="${SDK_DIR:-}"
 SDK_ARCHIVE=""
@@ -31,6 +34,9 @@ Environment variables:
   JOBS           Parallel make jobs (default: detected CPU count)
   KEEP_SDK       Keep extracted SDK after build, 1 or 0 (default: 1)
   FEEDS_UPDATE   Run feeds update/install before build, 1 or 0 (default: 1)
+  FEEDS_INSTALL_ALL  Install every feed package instead of only required packages (default: 0)
+  FEED_PACKAGES  Feed source packages required by this package (default: bind jq yq)
+  BUILD_VERBOSE  Pass V=s to make, 1 or 0 (default: 0)
 
 Examples:
   SDK_URL=https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst ./build.sh
@@ -104,7 +110,17 @@ prepare_feeds() {
   (
     cd "$SDK_DIR"
     ./scripts/feeds update -a
-    ./scripts/feeds install -a
+    if [[ "$FEEDS_INSTALL_ALL" == "1" ]]; then
+      log "installing all feed packages"
+      ./scripts/feeds install -a
+    else
+      log "installing required feed packages: $FEED_PACKAGES"
+      # Core dependencies such as curl, dnsmasq and ipset are already present
+      # in the SDK. These names refer to additional feed source packages.
+      for feed_package in $FEED_PACKAGES; do
+        ./scripts/feeds install "$feed_package"
+      done
+    fi
   )
 }
 
@@ -114,7 +130,9 @@ build_package() {
     cd "$SDK_DIR"
     make defconfig
     make "package/$PACKAGE_NAME/clean"
-    make -j"$JOBS" "package/$PACKAGE_NAME/compile" V=s
+    make_args=(-j"$JOBS" "package/$PACKAGE_NAME/compile")
+    [[ "$BUILD_VERBOSE" == "1" ]] && make_args+=(V=s)
+    make "${make_args[@]}"
   )
 }
 

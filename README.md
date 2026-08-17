@@ -19,6 +19,10 @@ SDK_URL=https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sd
 Build artifacts are written to `dist/`. OpenWrt 24.10 and older SDKs produce
 `.ipk` packages; OpenWrt 25.12 and newer SDKs produce `.apk` packages.
 
+The build script installs only the feed source packages required by trafix
+(`bind`, `jq`, and `yq`) by default. Set `FEEDS_INSTALL_ALL=1` to install every
+feed package, or `BUILD_VERBOSE=1` to enable OpenWrt `V=s` output when debugging.
+
 ## OpenWrt package feed
 
 Pushes to `main` publish a simple OpenWrt package feed to GitHub Pages. Release tags only publish the GitHub Release assets.
