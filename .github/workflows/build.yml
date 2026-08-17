@@ -75,6 +75,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gawk libncurses5-dev libncursesw5-dev file rsync unzip wget zlib1g-dev python3-distutils python3-pyelftools zstd
 
+      - name: Cache OpenWrt SDK archive
+        uses: actions/cache@v4
+        with:
+          path: .work/downloads
+          key: openwrt-sdk-${{ matrix.name }}
+
       - name: Build package
         env:
           SDK_URL: ${{ matrix.sdk_url }}
