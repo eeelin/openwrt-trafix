@@ -5,6 +5,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$ROOT_DIR/package/trafix/files/etc/init.d/trafix"
 
+# rc.common treats any non-empty USE_PROCD value, including "0", as enabled.
+# This service implements legacy start()/stop() handlers, so USE_PROCD must be
+# absent or rc.common will bypass them and silently perform no work.
+if grep -q '^USE_PROCD=' "$SCRIPT_PATH"; then
+	echo 'Legacy init script must not define USE_PROCD' >&2
+	exit 1
+fi
+
 assert_contains() {
 	local haystack="$1"
 	local needle="$2"
