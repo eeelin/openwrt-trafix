@@ -57,5 +57,6 @@ apk add --allow-untrusted ./trafix-*.apk
 Default CI targets build OpenWrt 22.03.5 and OpenWrt 25.12.5 for `x86-64`
 plus NanoPi R5C-compatible `rockchip/armv8`.
 
-Release builds pass the Git tag directly into the OpenWrt package metadata, so
-artifacts published for a tag such as `v0.0.8` use package version `v0.0.8-r1`.
+Release builds pass the Git tag directly into the OpenWrt package metadata.
+Numeric release tags are used so a tag such as `0.0.8` produces package version
+`0.0.8-r1` (APK) or `0.0.8-1` (IPK).
