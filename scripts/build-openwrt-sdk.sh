@@ -13,6 +13,7 @@ FEEDS_UPDATE="${FEEDS_UPDATE:-1}"
 FEEDS_INSTALL_ALL="${FEEDS_INSTALL_ALL:-0}"
 FEED_PACKAGES="${FEED_PACKAGES:-bind jq yq}"
 BUILD_VERBOSE="${BUILD_VERBOSE:-0}"
+TRAFIX_VERSION="${TRAFIX_VERSION:-1.0.0}"
 SDK_URL="${SDK_URL:-}"
 SDK_DIR="${SDK_DIR:-}"
 SDK_ARCHIVE=""
@@ -37,6 +38,7 @@ Environment variables:
   FEEDS_INSTALL_ALL  Install every feed package instead of only required packages (default: 0)
   FEED_PACKAGES  Feed source packages required by this package (default: bind jq yq)
   BUILD_VERBOSE  Pass V=s to make, 1 or 0 (default: 0)
+  TRAFIX_VERSION Package version embedded in the artifact (default: 1.0.0)
 
 Examples:
   SDK_URL=https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst ./build.sh
@@ -128,11 +130,11 @@ build_package() {
   log "building package $PACKAGE_NAME"
   (
     cd "$SDK_DIR"
-    make defconfig
-    make "package/$PACKAGE_NAME/clean"
+    make TRAFIX_VERSION="$TRAFIX_VERSION" defconfig
+    make TRAFIX_VERSION="$TRAFIX_VERSION" "package/$PACKAGE_NAME/clean"
     make_args=(-j"$JOBS" "package/$PACKAGE_NAME/compile")
     [[ "$BUILD_VERBOSE" == "1" ]] && make_args+=(V=s)
-    make "${make_args[@]}"
+    make TRAFIX_VERSION="$TRAFIX_VERSION" "${make_args[@]}"
   )
 }
 
