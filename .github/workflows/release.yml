@@ -49,6 +49,7 @@ jobs:
         env:
           SDK_URL: ${{ matrix.sdk_url }}
           ARTIFACT_DIR: ${{ github.workspace }}/dist/${{ matrix.name }}
+          TRAFIX_VERSION: ${{ github.ref_name }}
         run: ./build.sh
 
       - name: Upload release artifacts
