@@ -20,12 +20,14 @@ jobs:
       - name: Validate shell scripts
         run: |
           bash -n build.sh
+          sh -n install.sh
           bash -n scripts/build-openwrt-sdk.sh
           sh -n package/trafix/files/etc/init.d/trafix
           sh -n package/trafix/files/usr/bin/trafix
           sh -n package/trafix/files/usr/bin/trafix2dnsmasq.sh
           bash -n tests/test_trafix_initd.sh
           bash -n tests/test_trafix_config.sh
+          bash -n tests/test_install.sh
           python3 -m py_compile scripts/build-openwrt-feed.py
 
       - name: Install test dependencies
@@ -38,6 +40,9 @@ jobs:
 
       - name: Run YAML configuration tests
         run: bash tests/test_trafix_config.sh
+
+      - name: Run installer tests
+        run: bash tests/test_install.sh
 
   prepare-matrix:
     runs-on: ubuntu-22.04

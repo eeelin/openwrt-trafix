@@ -47,6 +47,22 @@ artifact with:
 apk add --allow-untrusted ./trafix-*.apk
 ```
 
+Install or upgrade to the latest compatible GitHub release directly on an
+OpenWrt router:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/eeelin/openwrt-trafix/main/install.sh | sh
+```
+
+The installer detects `apk`/`opkg` and x86-64/aarch64 automatically, verifies
+the release checksum, preserves package-managed configuration, and restarts the
+service. Download it first to select a specific version or inspect the choice:
+
+```sh
+./install.sh --version 0.0.8
+./install.sh --dry-run
+```
+
 ## GitHub Actions
 
 - `.github/workflows/build.yml`: validates scripts, builds the package, and publishes the GitHub Pages OpenWrt feed on pushes to `main`.
