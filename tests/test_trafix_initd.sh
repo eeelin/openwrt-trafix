@@ -4,6 +4,22 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$ROOT_DIR/package/trafix/files/etc/init.d/trafix"
+PACKAGE_MAKEFILE="$ROOT_DIR/package/trafix/Makefile"
+
+# rc.common treats any non-empty USE_PROCD value, including "0", as enabled.
+# This service implements legacy start()/stop() handlers, so USE_PROCD must be
+# absent or rc.common will bypass them and silently perform no work.
+if grep -q '^USE_PROCD=' "$SCRIPT_PATH"; then
+	echo 'Legacy init script must not define USE_PROCD' >&2
+	exit 1
+fi
+
+for dependency in ipset iptables-nft ip6tables-nft; do
+	grep -Eq "DEPENDS:=.*\\+$dependency([[:space:]]|$)" "$PACKAGE_MAKEFILE" || {
+		echo "Missing runtime dependency: $dependency" >&2
+		exit 1
+	}
+done
 
 assert_contains() {
 	local haystack="$1"

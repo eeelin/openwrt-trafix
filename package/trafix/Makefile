@@ -13,7 +13,7 @@ define Package/trafix
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Rule-based dnsmasq/ipset redirect helper
-  DEPENDS:=+curl +jq +yq +bind-dig +dnsmasq-full +ipset
+  DEPENDS:=+curl +jq +yq +bind-dig +dnsmasq-full +ipset +iptables-nft +ip6tables-nft
 endef
 
 define Package/trafix/description
