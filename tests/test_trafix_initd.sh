@@ -14,7 +14,7 @@ if grep -q '^USE_PROCD=' "$SCRIPT_PATH"; then
 	exit 1
 fi
 
-for dependency in ipset iptables-nft ip6tables-nft; do
+for dependency in ipset iptables-nft ip6tables-nft iptables-mod-extra iptables-mod-nat-extra ip6tables-mod-nat; do
 	grep -Eq "DEPENDS:=.*\\+$dependency([[:space:]]|$)" "$PACKAGE_MAKEFILE" || {
 		echo "Missing runtime dependency: $dependency" >&2
 		exit 1
@@ -35,6 +35,19 @@ assert_not_contains() {
 	local needle="$2"
 	if [[ "$haystack" == *"$needle"* ]]; then
 		echo "Did not expect output to contain: $needle" >&2
+		exit 1
+	fi
+}
+
+assert_before() {
+	local haystack="$1"
+	local first="$2"
+	local second="$3"
+	local first_line second_line
+	first_line="$(grep -nF -- "$first" <<<"$haystack" | head -n1 | cut -d: -f1)"
+	second_line="$(grep -nF -- "$second" <<<"$haystack" | head -n1 | cut -d: -f1)"
+	if [[ -z "$first_line" || -z "$second_line" || "$first_line" -ge "$second_line" ]]; then
+		echo "Expected '$first' before '$second'" >&2
 		exit 1
 	fi
 }
@@ -236,10 +249,12 @@ run_dryrun_proxy_test() {
 			case "$2/$3" in
 				general/redir_ipv4_port) printf -v "$1" "%s" "12345" ;;
 				general/redir_ipv6_port) printf -v "$1" "%s" "23456" ;;
+				general/owner_bypass_user) printf -v "$1" "%s" "singbox" ;;
 				*) printf -v "$1" "%s" "" ;;
 			esac
 		}
 		config_get_bool() { printf -v "$1" "%s" "1"; }
+		id() { [[ "$1" == "-u" && "$2" == "singbox" ]] && echo 453; }
 		source "'"$SCRIPT_PATH"'"
 		STATE_DIR="'"$tmpdir"'/state"
 		RUNTIME_ENV="$STATE_DIR/runtime.env"
@@ -259,11 +274,19 @@ run_dryrun_proxy_test() {
 	')"
 
 	assert_contains "$output" '# dry-run start (FINAL_ACTION=proxy)'
+	assert_contains "$output" '[trafix/init] owner bypass: singbox (uid 453)'
 	assert_contains "$output" '[trafix/init] started (final action: proxy)'
 	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
 	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "23456"'
 	assert_contains "$output" '+ iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP'
 	assert_contains "$output" '+ ip6tables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -j DROP'
+	assert_contains "$output" '+ iptables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN'
+	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN'
+	assert_contains "$output" '+ iptables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN'
+	assert_contains "$output" '+ ip6tables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN'
+	assert_before "$output" '--uid-owner "453" -j RETURN' 'iptables -t nat -C TRAFIX_OUTPUT -j TRAFIX'
+	assert_not_contains "$output" 'iptables -t nat -C OUTPUT -j TRAFIX 2>/dev/null'
+	assert_not_contains "$output" 'iptables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null'
 	assert_not_contains "$output" '--match-set trafix dst -j REDIRECT --to-ports "12345"'
 
 	rm -rf "$tmpdir"
@@ -297,6 +320,8 @@ EOF
 		setup_ipset_ipv6() { :; }
 		setup_block_filter_ipv4() { :; }
 		setup_block_filter_ipv6() { :; }
+		setup_filter_output_ipv4() { :; }
+		setup_filter_output_ipv6() { :; }
 		setup_redir_iptables_ipv4() { :; }
 		setup_redir_iptables_ipv6() { :; }
 		start

@@ -14,6 +14,8 @@ RUNTIME_ENV="$STATE_DIR/runtime.env"
 DRY_RUN="${TRAFIX_DRY_RUN:-0}"
 DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
 TRAFIX_BIN=/usr/bin/trafix
+OWNER_BYPASS_USER=
+OWNER_BYPASS_UID=
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
 PROXY_IPSET_NET_CONF="$STATE_DIR/proxy-ipset-net.conf"
 PROXY_IP6SET_CONF="$STATE_DIR/proxy-ip6set.conf"
@@ -71,6 +73,60 @@ update_runtime_state() {
 		echo "[trafix/init] ERROR: update completed without creating $RUNTIME_ENV" >&2
 		return 1
 	}
+}
+
+resolve_owner_bypass() {
+	config_get OWNER_BYPASS_USER 'general' 'owner_bypass_user'
+	[ -n "$OWNER_BYPASS_USER" ] || return 0
+	command -v id >/dev/null 2>&1 || {
+		echo "[trafix/init] ERROR: id is required for owner_bypass_user" >&2
+		return 1
+	}
+	OWNER_BYPASS_UID="$(id -u "$OWNER_BYPASS_USER" 2>/dev/null)" || {
+		echo "[trafix/init] ERROR: owner bypass user does not exist: $OWNER_BYPASS_USER" >&2
+		return 1
+	}
+	[ "$OWNER_BYPASS_UID" != 0 ] || {
+		echo "[trafix/init] ERROR: refusing owner bypass for uid 0" >&2
+		return 1
+	}
+	service_log "owner bypass: $OWNER_BYPASS_USER (uid $OWNER_BYPASS_UID)"
+}
+
+setup_filter_output_ipv4() {
+	run_cmd "iptables -N TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	if [ -n "$OWNER_BYPASS_UID" ]; then
+		run_cmd "iptables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
+	fi
+	run_cmd "iptables -C TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER"
+	run_cmd "iptables -C OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null || iptables -A OUTPUT -j TRAFIX_FILTER_OUTPUT"
+}
+
+setup_filter_output_ipv6() {
+	run_cmd "ip6tables -N TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	if [ -n "$OWNER_BYPASS_UID" ]; then
+		run_cmd "ip6tables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
+	fi
+	run_cmd "ip6tables -C TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER"
+	run_cmd "ip6tables -C OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null || ip6tables -A OUTPUT -j TRAFIX_FILTER_OUTPUT"
+}
+
+setup_redir_output_ipv4() {
+	run_cmd "iptables -t nat -N TRAFIX_OUTPUT 2>/dev/null"
+	if [ -n "$OWNER_BYPASS_UID" ]; then
+		run_cmd "iptables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
+	fi
+	run_cmd "iptables -t nat -C TRAFIX_OUTPUT -j TRAFIX 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -j TRAFIX"
+	run_cmd "iptables -t nat -C OUTPUT -j TRAFIX_OUTPUT 2>/dev/null || iptables -t nat -A OUTPUT -j TRAFIX_OUTPUT"
+}
+
+setup_redir_output_ipv6() {
+	run_cmd "ip6tables -t nat -N TRAFIX_OUTPUT 2>/dev/null"
+	if [ -n "$OWNER_BYPASS_UID" ]; then
+		run_cmd "ip6tables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
+	fi
+	run_cmd "ip6tables -t nat -C TRAFIX_OUTPUT -j TRAFIX 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -j TRAFIX"
+	run_cmd "ip6tables -t nat -C OUTPUT -j TRAFIX_OUTPUT 2>/dev/null || ip6tables -t nat -A OUTPUT -j TRAFIX_OUTPUT"
 }
 
 test_dns_domain() {
@@ -236,7 +292,6 @@ setup_ipset_ipv6() {
 setup_block_filter_ipv4() {
 	run_cmd "iptables -N TRAFIX_FILTER 2>/dev/null"
 	run_cmd "iptables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || iptables -A FORWARD -j TRAFIX_FILTER"
-	run_cmd "iptables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || iptables -A OUTPUT -j TRAFIX_FILTER"
 	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP"
 	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP"
 }
@@ -244,7 +299,6 @@ setup_block_filter_ipv4() {
 setup_block_filter_ipv6() {
 	run_cmd "ip6tables -N TRAFIX_FILTER 2>/dev/null"
 	run_cmd "ip6tables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || ip6tables -A FORWARD -j TRAFIX_FILTER"
-	run_cmd "ip6tables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null || ip6tables -A OUTPUT -j TRAFIX_FILTER"
 	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP"
 	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP"
 }
@@ -312,7 +366,7 @@ setup_redir_iptables_ipv4() {
 	esac
 
 	run_cmd "iptables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || iptables -t nat -A PREROUTING -j TRAFIX"
-	run_cmd "iptables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || iptables -t nat -A OUTPUT -j TRAFIX"
+	setup_redir_output_ipv4
 }
 
 setup_redir_iptables_ipv6() {
@@ -336,7 +390,7 @@ setup_redir_iptables_ipv6() {
 	esac
 
 	run_cmd "ip6tables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || ip6tables -t nat -A PREROUTING -j TRAFIX"
-	run_cmd "ip6tables -t nat -C OUTPUT -j TRAFIX 2>/dev/null || ip6tables -t nat -A OUTPUT -j TRAFIX"
+	setup_redir_output_ipv6
 }
 
 start() {
@@ -350,6 +404,7 @@ start() {
 	config_load 'trafix'
 	config_get port4 'general' 'redir_ipv4_port'
 	config_get port6 'general' 'redir_ipv6_port'
+	resolve_owner_bypass || return 1
 
 	service_log "configuring IPv4 ipsets"
 	setup_ipset_ipv4
@@ -358,6 +413,8 @@ start() {
 	service_log "configuring block filters"
 	setup_block_filter_ipv4
 	setup_block_filter_ipv6
+	setup_filter_output_ipv4
+	setup_filter_output_ipv6
 	service_log "configuring redirects (IPv4 port: $port4, IPv6 port: $port6)"
 	setup_redir_iptables_ipv4 "$port4"
 	setup_redir_iptables_ipv6 "$port6"
@@ -366,30 +423,43 @@ start() {
 }
 
 cleanup_filter_ipv4() {
-	run_cmd "iptables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -D OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	run_cmd "iptables -F TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	run_cmd "iptables -X TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	# Remove the direct hook used by trafix versions before owner bypass chains.
 	run_cmd "iptables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "iptables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
 	run_cmd "iptables -F TRAFIX_FILTER 2>/dev/null"
 	run_cmd "iptables -X TRAFIX_FILTER 2>/dev/null"
 }
 
 cleanup_filter_ipv6() {
-	run_cmd "ip6tables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -D OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	run_cmd "ip6tables -F TRAFIX_FILTER_OUTPUT 2>/dev/null"
+	run_cmd "ip6tables -X TRAFIX_FILTER_OUTPUT 2>/dev/null"
 	run_cmd "ip6tables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
+	run_cmd "ip6tables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
 	run_cmd "ip6tables -F TRAFIX_FILTER 2>/dev/null"
 	run_cmd "ip6tables -X TRAFIX_FILTER 2>/dev/null"
 }
 
 cleanup_redir_iptables_ipv4() {
-	run_cmd "iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -D OUTPUT -j TRAFIX_OUTPUT 2>/dev/null"
+	run_cmd "iptables -t nat -F TRAFIX_OUTPUT 2>/dev/null"
+	run_cmd "iptables -t nat -X TRAFIX_OUTPUT 2>/dev/null"
 	run_cmd "iptables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
+	run_cmd "iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
 	run_cmd "iptables -t nat -F TRAFIX 2>/dev/null"
 	run_cmd "iptables -t nat -X TRAFIX 2>/dev/null"
 	cleanup_filter_ipv4
 }
 
 cleanup_redir_iptables_ipv6() {
-	run_cmd "ip6tables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -D OUTPUT -j TRAFIX_OUTPUT 2>/dev/null"
+	run_cmd "ip6tables -t nat -F TRAFIX_OUTPUT 2>/dev/null"
+	run_cmd "ip6tables -t nat -X TRAFIX_OUTPUT 2>/dev/null"
 	run_cmd "ip6tables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
+	run_cmd "ip6tables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
 	run_cmd "ip6tables -t nat -F TRAFIX 2>/dev/null"
 	run_cmd "ip6tables -t nat -X TRAFIX 2>/dev/null"
 	cleanup_filter_ipv6
