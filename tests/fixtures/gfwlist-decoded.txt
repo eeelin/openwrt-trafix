@@ -1,0 +1,8 @@
+[AutoProxy 0.2.9]
+! test fixture
+||blocked.example.com
+.suffix.example.org
+|https://exact.example.net/path
+@@||direct.example.com
+/regexp\\.example/
+||options.example.io^$important
