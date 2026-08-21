@@ -122,6 +122,41 @@ test_local_yaml_and_payload_rule_sets() {
 	rm -rf "$work"
 }
 
+test_remote_gfwlist_rule_set() {
+	local work config encoded_fixture
+	work="$(mktemp -d)"
+	config="$work/config.yaml"
+	encoded_fixture="$work/gfwlist.txt"
+	base64 "$FIXTURES/gfwlist-decoded.txt" > "$encoded_fixture"
+	mkdir -p "$work/fakebin"
+	cat > "$work/fakebin/curl" <<EOF
+#!/bin/sh
+cp "$encoded_fixture" "\${4}"
+EOF
+	chmod +x "$work/fakebin/curl"
+	cat > "$config" <<'EOF'
+rule_sets:
+  - tag: remote-gfwlist
+    type: remote
+    format: gfwlist
+    url: https://example.invalid/gfwlist.txt
+route_rules:
+  - rule_set: [remote-gfwlist]
+    action: proxy
+final_action: bypass
+EOF
+
+	run_update "$config" "$work"
+	assert_file_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\tblocked.example.com'
+	assert_file_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\tsuffix.example.org'
+	assert_file_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\texact.example.net'
+	assert_file_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\toptions.example.io'
+	assert_file_not_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\tdirect.example.com'
+	assert_file_not_contains "$work/state/rule-set-cache/remote-gfwlist.tsv" $'domain_suffix\tregexp.example'
+	assert_file_contains "$work/state/proxy-domain.list" 'blocked.example.com'
+	rm -rf "$work"
+}
+
 test_absolute_local_rule_set_path() {
 	local work config
 	work="$(mktemp -d)"
@@ -190,6 +225,7 @@ python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run conf
 test_inline_matchers_and_bypass_default
 test_proxy_default_and_disabled_rule
 test_local_yaml_and_payload_rule_sets
+test_remote_gfwlist_rule_set
 test_absolute_local_rule_set_path
 test_update_rebuilds_rule_set_cache
 

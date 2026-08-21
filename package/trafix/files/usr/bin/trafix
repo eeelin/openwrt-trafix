@@ -62,6 +62,46 @@ validate_dependencies() {
 	require_command sort
 }
 
+decode_gfwlist() {
+	input_file="$1"
+	output_file="$2"
+	require_command base64
+	base64 -d "$input_file" > "$output_file" 2>/dev/null ||
+		fail "failed to decode base64 gfwlist source"
+}
+
+append_gfwlist() {
+	input_file="$1"
+	out_file="$2"
+	awk '
+		function emit_domain(value) {
+			value = tolower(value)
+			sub(/[.:]+$/, "", value)
+			if (value ~ /^[[:alnum:]_][[:alnum:]_.-]*\.[[:alnum:]_][[:alnum:]_.-]*$/)
+				print "domain_suffix\t" value
+		}
+		{
+			sub(/\r$/, "")
+			line = $0
+			if (line == "" || line ~ /^!/ || line ~ /^\[/ || line ~ /^@@/ || line ~ /^\/.+\/$/)
+				next
+			sub(/\$.*/, "", line)
+			if (line ~ /^\|\|/) {
+				sub(/^\|\|/, "", line)
+				split(line, parts, /[\^\/*|]/)
+				emit_domain(parts[1])
+				next
+			}
+			sub(/^\|/, "", line)
+			sub(/^https?:\/\//, "", line)
+			sub(/^\*\.?/, "", line)
+			sub(/^\./, "", line)
+			split(line, parts, /[\^\/*|]/)
+			emit_domain(parts[1])
+		}
+	' "$input_file" >> "$out_file"
+}
+
 cleanup() {
 	[ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 }
@@ -226,6 +266,11 @@ build_rule_set() {
 					yq -r '.payload[]? // empty' "$source_file" | while IFS= read -r payload_line; do
 						append_payload_line "$payload_line" "$out_file"
 					done
+					;;
+				gfwlist|autoproxy)
+					decoded_file="$TMP_DIR/$tag.decoded"
+					decode_gfwlist "$source_file" "$decoded_file"
+					append_gfwlist "$decoded_file" "$out_file"
 					;;
 				*)
 					fail "unsupported rule_set format '$format' for tag '$tag'"

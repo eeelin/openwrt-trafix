@@ -32,6 +32,20 @@ Currently supported matcher types in `route_rules` are:
 - `ip_cidr`
 - `ip6_cidr`
 
+Remote and local rule sets support `trafix`/`yaml`, `payload`/`clash`, and
+`gfwlist`/`autoproxy` formats. A GFWList source is expected to contain the
+standard Base64-encoded AutoProxy rules. Domain rules are compiled as
+`domain_suffix` matchers; comments, regular-expression rules, and `@@`
+exception rules are ignored because trafix operates at DNS/domain granularity.
+
+```yaml
+rule_sets:
+  - tag: gfwlist
+    type: remote
+    format: gfwlist
+    url: https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt
+```
+
 Generated runtime artifacts are written under `/var/trafix/`.
 
 ## Exclude a local proxy process
