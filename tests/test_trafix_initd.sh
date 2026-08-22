@@ -14,7 +14,7 @@ if grep -q '^USE_PROCD=' "$SCRIPT_PATH"; then
 	exit 1
 fi
 
-for dependency in ipset iptables-nft ip6tables-nft iptables-mod-extra iptables-mod-nat-extra ip6tables-mod-nat; do
+for dependency in coreutils-base64 ipset iptables-nft ip6tables-nft iptables-mod-extra iptables-mod-nat-extra ip6tables-mod-nat; do
 	grep -Eq "DEPENDS:=.*\\+$dependency([[:space:]]|$)" "$PACKAGE_MAKEFILE" || {
 		echo "Missing runtime dependency: $dependency" >&2
 		exit 1
