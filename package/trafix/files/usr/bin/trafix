@@ -6,7 +6,8 @@ BINDIR="$(dirname "$0")"
 DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
 STATE_DIR="${TRAFIX_STATE_DIR:-/var/trafix}"
 RULESET_CACHE_DIR="$STATE_DIR/rule-set-cache"
-DNSMASQ_OUT="${TRAFIX_DNSMASQ_OUT:-/tmp/dnsmasq.d/trafix.conf}"
+DEFAULT_DNSMASQ_CONF_DIR=/tmp/dnsmasq.d
+DNSMASQ_OUT="${TRAFIX_DNSMASQ_OUT:-}"
 DNS_SERVER=127.0.0.1
 DNS_PORT=6053
 RUNTIME_ENV="$STATE_DIR/runtime.env"
@@ -123,6 +124,24 @@ resolve_config_file() {
 		config_file="$DEFAULT_CONFIG_FILE"
 	fi
 	echo "$config_file"
+}
+
+resolve_dnsmasq_out() {
+	[ -n "$DNSMASQ_OUT" ] && return 0
+	dnsmasq_conf_dir=""
+	if command -v uci >/dev/null 2>&1; then
+		dnsmasq_conf_dir="$(uci -q get trafix.general.dnsmasq_conf_dir 2>/dev/null)"
+	fi
+	[ -n "$dnsmasq_conf_dir" ] || dnsmasq_conf_dir="$DEFAULT_DNSMASQ_CONF_DIR"
+	case "$dnsmasq_conf_dir" in
+		/*) ;;
+		*) fail "dnsmasq_conf_dir must be an absolute path: $dnsmasq_conf_dir" ;;
+	esac
+	case "$dnsmasq_conf_dir" in
+		/) DNSMASQ_OUT=/trafix.conf ;;
+		*/) DNSMASQ_OUT="${dnsmasq_conf_dir}trafix.conf" ;;
+		*) DNSMASQ_OUT="$dnsmasq_conf_dir/trafix.conf" ;;
+	esac
 }
 
 prepare_workspace() {
@@ -476,6 +495,7 @@ generate_dnsmasq_conf() {
 update() {
 	log "validating runtime dependencies"
 	validate_dependencies
+	resolve_dnsmasq_out
 	log "loading configuration: $(resolve_config_file)"
 	prepare_workspace
 	load_config_json

@@ -60,6 +60,28 @@ run_update() {
 		"$TRAFIX" update
 }
 
+test_custom_dnsmasq_conf_dir() {
+	local work custom_dir
+	work="$(mktemp -d)"
+	custom_dir="$work/dnsmasq.instance.d"
+	mkdir -p "$work/fakebin" "$work/state"
+	install_test_yq "$work/fakebin"
+	cat > "$work/fakebin/uci" <<EOF
+#!/bin/sh
+[ "\$*" = "-q get trafix.general.dnsmasq_conf_dir" ] && printf '%s\\n' "$custom_dir"
+EOF
+	chmod +x "$work/fakebin/uci"
+	PATH="$work/fakebin:$PATH" \
+		TRAFIX_CONFIG="$FIXTURES/trafix-inline.yaml" \
+		TRAFIX_STATE_DIR="$work/state" \
+		"$TRAFIX" update
+
+	[[ -f "$custom_dir/trafix.conf" ]] || fail 'custom dnsmasq trafix.conf was not generated'
+	assert_file_contains "$custom_dir/trafix.conf" 'server=/proxy.example/127.0.0.1#6053'
+	[[ ! -e "$work/trafix.conf" ]] || fail 'unexpected dnsmasq config at the old output path'
+	rm -rf "$work"
+}
+
 test_inline_matchers_and_bypass_default() {
 	local work
 	work="$(mktemp -d)"
@@ -223,6 +245,7 @@ command -v jq >/dev/null || fail 'jq is required to run config tests'
 python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run config tests'
 
 test_inline_matchers_and_bypass_default
+test_custom_dnsmasq_conf_dir
 test_proxy_default_and_disabled_rule
 test_local_yaml_and_payload_rule_sets
 test_remote_gfwlist_rule_set
