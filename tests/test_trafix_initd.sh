@@ -28,11 +28,18 @@ if grep -q '^USE_PROCD=' "$SCRIPT_PATH"; then
 	exit 1
 fi
 
-for dependency in coreutils-base64 ipset iptables-nft ip6tables-nft iptables-mod-extra iptables-mod-nat-extra ip6tables-mod-nat; do
+for dependency in coreutils-base64 nftables kmod-nft-nat; do
 	grep -Eq "DEPENDS:=.*\\+$dependency([[:space:]]|$)" "$PACKAGE_MAKEFILE" || {
 		echo "Missing runtime dependency: $dependency" >&2
 		exit 1
 	}
+done
+
+for obsolete_dependency in ipset iptables-nft ip6tables-nft iptables-mod-extra iptables-mod-nat-extra ip6tables-mod-nat; do
+	if grep -Eq "DEPENDS:=.*\\+$obsolete_dependency([[:space:]]|$)" "$PACKAGE_MAKEFILE"; then
+		echo "Obsolete runtime dependency remains: $obsolete_dependency" >&2
+		exit 1
+	fi
 done
 
 assert_contains() {
@@ -240,13 +247,12 @@ run_dryrun_bypass_test() {
 	assert_contains "$output" '# dry-run start (FINAL_ACTION=bypass)'
 	assert_contains "$output" '[trafix/init] starting'
 	assert_contains "$output" '[trafix/init] dry-run: using existing runtime state'
-	assert_contains "$output" '[trafix/init] configuring IPv4 ipsets'
-	assert_contains "$output" '[trafix/init] configuring redirects (IPv4 port: 12345, IPv6 port: 23456)'
+	assert_contains "$output" '[trafix/init] configuring nftables sets, filters, and redirects (IPv4 port: 12345, IPv6 port: 23456)'
 	assert_contains "$output" '[trafix/init] started (final action: bypass)'
-	assert_contains "$output" '+ ipset -q add "trafix" "198.51.100.1"'
-	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports "12345"'
-	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports "23456"'
-	assert_not_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
+	assert_contains "$output" '+ nft add element inet trafix "proxy4" "{ 198.51.100.1 }" 2>/dev/null || true'
+	assert_contains "$output" '+ nft add rule inet trafix prerouting ip daddr @proxy4 meta l4proto tcp redirect to :12345'
+	assert_contains "$output" '+ nft add rule inet trafix prerouting ip6 daddr @proxy6 meta l4proto tcp redirect to :23456'
+	assert_not_contains "$output" 'meta nfproto ipv4 meta l4proto tcp redirect to :12345'
 
 	rm -rf "$tmpdir"
 }
@@ -290,17 +296,12 @@ run_dryrun_proxy_test() {
 	assert_contains "$output" '# dry-run start (FINAL_ACTION=proxy)'
 	assert_contains "$output" '[trafix/init] owner bypass: singbox (uid 453)'
 	assert_contains "$output" '[trafix/init] started (final action: proxy)'
-	assert_contains "$output" '+ iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "12345" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "12345"'
-	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports "23456" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports "23456"'
-	assert_contains "$output" '+ iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP'
-	assert_contains "$output" '+ ip6tables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -j DROP'
-	assert_contains "$output" '+ iptables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN'
-	assert_contains "$output" '+ ip6tables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner "453" -j RETURN'
-	assert_contains "$output" '+ iptables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN'
-	assert_contains "$output" '+ ip6tables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner "453" -j RETURN'
-	assert_before "$output" '--uid-owner "453" -j RETURN' 'iptables -t nat -C TRAFIX_OUTPUT -j TRAFIX'
-	assert_not_contains "$output" 'iptables -t nat -C OUTPUT -j TRAFIX 2>/dev/null'
-	assert_not_contains "$output" 'iptables -C OUTPUT -j TRAFIX_FILTER 2>/dev/null'
+	assert_contains "$output" '+ nft add rule inet trafix prerouting meta nfproto ipv4 meta l4proto tcp redirect to :12345'
+	assert_contains "$output" '+ nft add rule inet trafix prerouting meta nfproto ipv6 meta l4proto tcp redirect to :23456'
+	assert_contains "$output" '+ nft add rule inet trafix forward_filter udp dport 443 drop'
+	assert_contains "$output" '+ nft add rule inet trafix output_nat meta skuid 453 return'
+	assert_contains "$output" '+ nft add rule inet trafix output_filter meta skuid 453 return'
+	assert_before "$output" 'output_nat meta skuid 453 return' 'output_nat meta nfproto ipv4 meta l4proto tcp redirect'
 	assert_not_contains "$output" '--match-set trafix dst -j REDIRECT --to-ports "12345"'
 
 	rm -rf "$tmpdir"
@@ -329,15 +330,10 @@ EOF
 		STATE_DIR="'"$tmpdir"'/state"
 		RUNTIME_ENV="$STATE_DIR/runtime.env"
 		TRAFIX_UPDATE_LIB="'"$tmpdir"'/update.sh"
+		validate_nft_runtime() { :; }
 		resolve_config_file() { echo /tmp/test-trafix.yaml; }
-		setup_ipset_ipv4() { :; }
-		setup_ipset_ipv6() { :; }
-		setup_block_filter_ipv4() { :; }
-		setup_block_filter_ipv6() { :; }
-		setup_filter_output_ipv4() { :; }
-		setup_filter_output_ipv6() { :; }
-		setup_redir_iptables_ipv4() { :; }
-		setup_redir_iptables_ipv6() { :; }
+		cleanup_legacy_iptables() { :; }
+		setup_nftables() { :; }
 		restart_dnsmasq() { echo dnsmasq-restarted; }
 		start
 	')"
@@ -366,11 +362,10 @@ run_start_reuses_initialized_state_test() {
 		source "'"$SCRIPT_PATH"'"
 		STATE_DIR="'"$tmpdir"'/state"
 		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		validate_nft_runtime() { :; }
 		update_runtime_state() { echo unexpected-update; return 1; }
-		setup_ipset_ipv4() { :; }; setup_ipset_ipv6() { :; }
-		setup_block_filter_ipv4() { :; }; setup_block_filter_ipv6() { :; }
-		setup_filter_output_ipv4() { :; }; setup_filter_output_ipv6() { :; }
-		setup_redir_iptables_ipv4() { :; }; setup_redir_iptables_ipv6() { :; }
+		cleanup_legacy_iptables() { :; }
+		setup_nftables() { :; }
 		start
 	')"
 	assert_contains "$output" '[trafix/init] using initialized runtime state'
@@ -385,13 +380,16 @@ run_service_update_test() {
 		update_runtime_state() { echo build-runtime; }
 		restart_dnsmasq() { echo restart-dnsmasq; }
 		stop() { echo stop-rules; }
+		flush_nft_sets() { echo flush-sets; }
 		start() { echo start-rules; }
 		update
 	')"
 	assert_contains "$output" '[trafix/init] updating runtime state'
-	assert_before "$output" 'build-runtime' 'restart-dnsmasq'
-	assert_before "$output" 'restart-dnsmasq' 'stop-rules'
+	assert_before "$output" 'build-runtime' 'stop-rules'
+	assert_before "$output" 'stop-rules' 'flush-sets'
+	assert_before "$output" 'flush-sets' 'start-rules'
 	assert_before "$output" 'stop-rules' 'start-rules'
+	assert_before "$output" 'start-rules' 'restart-dnsmasq'
 	assert_contains "$output" '[trafix/init] update applied'
 }
 

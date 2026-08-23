@@ -24,7 +24,6 @@ jobs:
           bash -n scripts/build-openwrt-sdk.sh
           sh -n package/trafix/files/etc/init.d/trafix
           sh -n package/trafix/files/usr/lib/trafix/update.sh
-          sh -n package/trafix/files/usr/bin/trafix2dnsmasq.sh
           bash -n tests/test_trafix_initd.sh
           bash -n tests/test_trafix_config.sh
           bash -n tests/test_install.sh
