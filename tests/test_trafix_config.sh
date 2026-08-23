@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TRAFIX="$ROOT_DIR/package/trafix/files/usr/bin/trafix"
+TRAFIX_UPDATE_LIB="$ROOT_DIR/package/trafix/files/usr/lib/trafix/update.sh"
 FIXTURES="$ROOT_DIR/tests/fixtures"
 
 fail() {
@@ -57,7 +57,7 @@ run_update() {
 		TRAFIX_CONFIG="$config" \
 		TRAFIX_STATE_DIR="$work/state" \
 		TRAFIX_DNSMASQ_OUT="$work/trafix.conf" \
-		"$TRAFIX" update
+		sh -c '. "$1"; trafix_build_runtime_state' _ "$TRAFIX_UPDATE_LIB"
 }
 
 test_custom_dnsmasq_conf_dir() {
@@ -74,7 +74,7 @@ EOF
 	PATH="$work/fakebin:$PATH" \
 		TRAFIX_CONFIG="$FIXTURES/trafix-inline.yaml" \
 		TRAFIX_STATE_DIR="$work/state" \
-		"$TRAFIX" update
+		sh -c '. "$1"; trafix_build_runtime_state' _ "$TRAFIX_UPDATE_LIB"
 
 	[[ -f "$custom_dir/trafix.conf" ]] || fail 'custom dnsmasq trafix.conf was not generated'
 	assert_file_contains "$custom_dir/trafix.conf" 'server=/proxy.example/127.0.0.1#6053'

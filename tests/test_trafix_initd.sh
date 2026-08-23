@@ -5,6 +5,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$ROOT_DIR/package/trafix/files/etc/init.d/trafix"
 PACKAGE_MAKEFILE="$ROOT_DIR/package/trafix/Makefile"
+UPDATE_LIB_PATH="$ROOT_DIR/package/trafix/files/usr/lib/trafix/update.sh"
+
+[[ -f "$UPDATE_LIB_PATH" ]] || {
+	echo 'Missing service update library' >&2
+	exit 1
+}
+[[ ! -e "$ROOT_DIR/package/trafix/files/usr/bin/trafix" ]] || {
+	echo 'Standalone /usr/bin/trafix must not be packaged' >&2
+	exit 1
+}
+grep -q '^EXTRA_COMMANDS=.*update' "$SCRIPT_PATH" || {
+	echo 'Service must expose the update command' >&2
+	exit 1
+}
 
 # rc.common treats any non-empty USE_PROCD value, including "0", as enabled.
 # This service implements legacy start()/stop() handlers, so USE_PROCD must be
@@ -296,12 +310,12 @@ run_start_updates_state_test() {
 	local tmpdir output
 	tmpdir="$(mktemp -d)"
 	mkdir -p "$tmpdir/state"
-	cat >"$tmpdir/trafix" <<EOF
-#!/bin/sh
-echo "[fake/trafix] update invoked with TRAFIX_CONFIG=\$TRAFIX_CONFIG"
-echo 'FINAL_ACTION=bypass' > "$tmpdir/state/runtime.env"
+	cat >"$tmpdir/update.sh" <<EOF
+trafix_build_runtime_state() {
+	echo "[fake/trafix] update invoked with TRAFIX_CONFIG=\$TRAFIX_CONFIG"
+	echo 'FINAL_ACTION=bypass' > "$tmpdir/state/runtime.env"
+}
 EOF
-	chmod +x "$tmpdir/trafix"
 
 	output="$(bash -c '
 		config_load() { :; }
@@ -314,7 +328,7 @@ EOF
 		source "'"$SCRIPT_PATH"'"
 		STATE_DIR="'"$tmpdir"'/state"
 		RUNTIME_ENV="$STATE_DIR/runtime.env"
-		TRAFIX_BIN="'"$tmpdir"'/trafix"
+		TRAFIX_UPDATE_LIB="'"$tmpdir"'/update.sh"
 		resolve_config_file() { echo /tmp/test-trafix.yaml; }
 		setup_ipset_ipv4() { :; }
 		setup_ipset_ipv6() { :; }
@@ -324,19 +338,68 @@ EOF
 		setup_filter_output_ipv6() { :; }
 		setup_redir_iptables_ipv4() { :; }
 		setup_redir_iptables_ipv6() { :; }
+		restart_dnsmasq() { echo dnsmasq-restarted; }
 		start
 	')"
 
 	assert_contains "$output" '[trafix/init] building runtime state from /tmp/test-trafix.yaml'
 	assert_contains "$output" '[fake/trafix] update invoked with TRAFIX_CONFIG=/tmp/test-trafix.yaml'
+	assert_contains "$output" 'dnsmasq-restarted'
 	assert_contains "$output" '[trafix/init] started (final action: bypass)'
 	[[ -f "$tmpdir/state/runtime.env" ]] || fail 'start did not create runtime.env'
 	rm -rf "$tmpdir"
+}
+
+run_start_reuses_initialized_state_test() {
+	local tmpdir output
+	tmpdir="$(mktemp -d)"
+	mkdir -p "$tmpdir/state"
+	printf 'FINAL_ACTION=bypass\n' > "$tmpdir/state/runtime.env"
+	output="$(bash -c '
+		config_load() { :; }
+		config_get() {
+			case "$2/$3" in
+				general/redir_ipv4_port) printf -v "$1" "%s" "12345" ;;
+				general/redir_ipv6_port) printf -v "$1" "%s" "23456" ;;
+			esac
+		}
+		source "'"$SCRIPT_PATH"'"
+		STATE_DIR="'"$tmpdir"'/state"
+		RUNTIME_ENV="$STATE_DIR/runtime.env"
+		update_runtime_state() { echo unexpected-update; return 1; }
+		setup_ipset_ipv4() { :; }; setup_ipset_ipv6() { :; }
+		setup_block_filter_ipv4() { :; }; setup_block_filter_ipv6() { :; }
+		setup_filter_output_ipv4() { :; }; setup_filter_output_ipv6() { :; }
+		setup_redir_iptables_ipv4() { :; }; setup_redir_iptables_ipv6() { :; }
+		start
+	')"
+	assert_contains "$output" '[trafix/init] using initialized runtime state'
+	assert_not_contains "$output" 'unexpected-update'
+	rm -rf "$tmpdir"
+}
+
+run_service_update_test() {
+	local output
+	output="$(bash -c '
+		source "'"$SCRIPT_PATH"'"
+		update_runtime_state() { echo build-runtime; }
+		restart_dnsmasq() { echo restart-dnsmasq; }
+		stop() { echo stop-rules; }
+		start() { echo start-rules; }
+		update
+	')"
+	assert_contains "$output" '[trafix/init] updating runtime state'
+	assert_before "$output" 'build-runtime' 'restart-dnsmasq'
+	assert_before "$output" 'restart-dnsmasq' 'stop-rules'
+	assert_before "$output" 'stop-rules' 'start-rules'
+	assert_contains "$output" '[trafix/init] update applied'
 }
 
 run_dns_check_test
 run_dryrun_bypass_test
 run_dryrun_proxy_test
 run_start_updates_state_test
+run_start_reuses_initialized_state_test
+run_service_update_test
 
 echo "All trafix init.d tests passed."

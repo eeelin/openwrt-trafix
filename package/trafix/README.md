@@ -8,7 +8,7 @@ This directory contains a standard OpenWrt package definition for `trafix`.
 - `files/etc/config/trafix`: UCI runtime settings
 - `files/etc/trafix/config.yaml`: unified rule configuration
 - `files/etc/init.d/trafix`: service script
-- `files/usr/bin/trafix`: rule compiler / updater
+- `files/usr/lib/trafix/update.sh`: internal rule compiler used by the service
 - `files/usr/bin/trafix2dnsmasq.sh`: dnsmasq helper script
 
 ## Config model
@@ -55,7 +55,7 @@ Set `dnsmasq_conf_dir` when the active dnsmasq instance uses a different
 ```sh
 uci set trafix.general.dnsmasq_conf_dir='/tmp/dnsmasq.cfg01411c.d'
 uci commit trafix
-trafix update
+/etc/init.d/trafix update
 /etc/init.d/dnsmasq restart
 ```
 
@@ -148,6 +148,14 @@ apk add --allow-untrusted ./trafix-*.apk
 
 ## Update rules
 
+Rule compilation is exposed through the service rather than a separate
+`/usr/bin/trafix` command. An ordinary `start` (and therefore `restart`) only
+performs an initial build when `/var/trafix/runtime.env` does not exist. After
+editing the YAML configuration, explicitly rebuild and apply it with:
+
 ```sh
-trafix update
+/etc/init.d/trafix update
 ```
+
+The update action rebuilds generated state, restarts dnsmasq so it reads the
+new `trafix.conf`, and reapplies the ipset and firewall rules.
