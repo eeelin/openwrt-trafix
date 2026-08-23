@@ -3,8 +3,9 @@
 START=70
 STOP=60
 
-EXTRA_COMMANDS="check dryrun_start dryrun_stop dryrun_restart"
-EXTRA_HELP="        check           Print current network status\n\
+EXTRA_COMMANDS="update check dryrun_start dryrun_stop dryrun_restart"
+EXTRA_HELP="        update          Rebuild and apply runtime state\n\
+        check           Print current network status\n\
 \t    dryrun_start    Print commands that would be executed during start\n\
 \t    dryrun_stop     Print commands that would be executed during stop\n\
 \t    dryrun_restart  Print commands that would be executed during restart"
@@ -13,7 +14,7 @@ STATE_DIR=/var/trafix
 RUNTIME_ENV="$STATE_DIR/runtime.env"
 DRY_RUN="${TRAFIX_DRY_RUN:-0}"
 DEFAULT_CONFIG_FILE=/etc/trafix/config.yaml
-TRAFIX_BIN=/usr/bin/trafix
+TRAFIX_UPDATE_LIB=/usr/lib/trafix/update.sh
 OWNER_BYPASS_USER=
 OWNER_BYPASS_UID=
 PROXY_IPSET_CONF="$STATE_DIR/proxy-ipset.conf"
@@ -65,7 +66,15 @@ service_log() {
 update_runtime_state() {
 	config_file="$(resolve_config_file)"
 	service_log "building runtime state from $config_file"
-	if ! TRAFIX_CONFIG="$config_file" "$TRAFIX_BIN" update; then
+	if [ ! -r "$TRAFIX_UPDATE_LIB" ]; then
+		echo "[trafix/init] ERROR: update library not found: $TRAFIX_UPDATE_LIB" >&2
+		return 1
+	fi
+	if ! (
+		export TRAFIX_CONFIG="$config_file"
+		. "$TRAFIX_UPDATE_LIB"
+		trafix_build_runtime_state
+	); then
 		echo "[trafix/init] ERROR: failed to build runtime state" >&2
 		return 1
 	fi
@@ -395,8 +404,16 @@ setup_redir_iptables_ipv6() {
 
 start() {
 	service_log "starting"
-	if [ "$DRY_RUN" != 1 ]; then
+	if [ "$DRY_RUN" != 1 ] && [ ! -f "$RUNTIME_ENV" ]; then
+		service_log "runtime state is not initialized; running initial update"
 		update_runtime_state || return 1
+		service_log "restarting dnsmasq to load generated configuration"
+		restart_dnsmasq || {
+			echo "[trafix/init] ERROR: failed to restart dnsmasq" >&2
+			return 1
+		}
+	elif [ "$DRY_RUN" != 1 ]; then
+		service_log "using initialized runtime state (run '/etc/init.d/trafix update' to rebuild)"
 	else
 		service_log "dry-run: using existing runtime state"
 	fi
@@ -420,6 +437,24 @@ start() {
 	setup_redir_iptables_ipv6 "$port6"
 	load_runtime_env
 	service_log "started (final action: $FINAL_ACTION)"
+}
+
+restart_dnsmasq() {
+	/etc/init.d/dnsmasq restart
+}
+
+update() {
+	service_log "updating runtime state"
+	update_runtime_state || return 1
+	service_log "restarting dnsmasq to load generated configuration"
+	restart_dnsmasq || {
+		echo "[trafix/init] ERROR: failed to restart dnsmasq" >&2
+		return 1
+	}
+	service_log "reapplying firewall and ipset rules"
+	stop
+	start
+	service_log "update applied"
 }
 
 cleanup_filter_ipv4() {

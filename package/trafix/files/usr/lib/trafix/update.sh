@@ -492,7 +492,7 @@ generate_dnsmasq_conf() {
 	esac
 }
 
-update() {
+trafix_build_runtime_state() {
 	log "validating runtime dependencies"
 	validate_dependencies
 	resolve_dnsmasq_out
@@ -507,5 +507,3 @@ update() {
 	generate_dnsmasq_conf
 	log "update complete (proxy domains: $(wc -l < "$PROXY_DOMAIN_LIST"), bypass domains: $(wc -l < "$BYPASS_DOMAIN_LIST"), block domains: $(wc -l < "$BLOCK_DOMAIN_LIST"))"
 }
-
-"$@"
