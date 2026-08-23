@@ -61,6 +61,10 @@ validate_dependencies() {
 	require_command curl
 	require_command awk
 	require_command sort
+	require_command nft
+	require_command dnsmasq
+	dnsmasq --version | grep -m1 'Compile time options:' | grep -q ' nftset\( \|$\)' ||
+		fail "dnsmasq does not support nftset; install a dnsmasq-full build with nftset support"
 }
 
 decode_gfwlist() {
@@ -480,13 +484,13 @@ generate_dnsmasq_conf() {
 			while IFS= read -r domain; do
 				[ -n "$domain" ] || continue
 				printf 'server=/%s/%s#%s\n' "$domain" "$DNS_SERVER" "$DNS_PORT" >> "$DNSMASQ_OUT"
-				printf 'ipset=/%s/trafix,trafix6\n' "$domain" >> "$DNSMASQ_OUT"
+				printf 'nftset=/%s/4#inet#trafix#proxy4,6#inet#trafix#proxy6\n' "$domain" >> "$DNSMASQ_OUT"
 			done < "$PROXY_DOMAIN_LIST"
 			;;
 		proxy)
 			while IFS= read -r domain; do
 				[ -n "$domain" ] || continue
-				printf 'ipset=/%s/trafix-bypass,trafix6-bypass\n' "$domain" >> "$DNSMASQ_OUT"
+				printf 'nftset=/%s/4#inet#trafix#bypass4,6#inet#trafix#bypass6\n' "$domain" >> "$DNSMASQ_OUT"
 			done < "$BYPASS_DOMAIN_LIST"
 			;;
 	esac

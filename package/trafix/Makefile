@@ -12,13 +12,13 @@ include $(INCLUDE_DIR)/package.mk
 define Package/trafix
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=Rule-based dnsmasq/ipset redirect helper
-  DEPENDS:=+curl +jq +yq +coreutils-base64 +bind-dig +dnsmasq-full +ipset +iptables-nft +ip6tables-nft +iptables-mod-extra +iptables-mod-nat-extra +ip6tables-mod-nat
+  TITLE:=Rule-based dnsmasq/nftset redirect helper
+  DEPENDS:=+curl +jq +yq +coreutils-base64 +bind-dig +dnsmasq-full +nftables +kmod-nft-nat
 endef
 
 define Package/trafix/description
  A small OpenWrt helper package that compiles rule_sets and route_rules into
- dnsmasq/ipset data and installs iptables/ip6tables redirect rules.
+ dnsmasq/nftset data and installs native nftables redirect rules.
 endef
 
 define Package/trafix/conffiles

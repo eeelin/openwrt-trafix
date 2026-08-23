@@ -47,6 +47,15 @@ else:
     raise SystemExit(f"unsupported test yq expression: {expression}")
 PY
 	chmod +x "$fakebin/yq"
+	cat > "$fakebin/dnsmasq" <<'EOF'
+#!/bin/sh
+echo 'Compile time options: IPv6 nftset'
+EOF
+	cat > "$fakebin/nft" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+	chmod +x "$fakebin/dnsmasq" "$fakebin/nft"
 }
 
 run_update() {
@@ -99,7 +108,10 @@ test_inline_matchers_and_bypass_default() {
 	assert_file_contains "$work/state/block-ipset.conf" '203.0.113.7/32'
 	assert_file_contains "$work/state/bypass-ip6set-net.conf" '2001:db8:1::/64'
 	assert_file_contains "$work/trafix.conf" 'server=/proxy.example/127.0.0.1#6053'
-	assert_file_contains "$work/trafix.conf" 'ipset=/proxy-suffix.example/trafix,trafix6'
+	assert_file_contains "$work/trafix.conf" 'nftset=/proxy-suffix.example/4#inet#trafix#proxy4,6#inet#trafix#proxy6'
+	if grep -q '^ipset=' "$work/trafix.conf"; then
+		fail 'generated dnsmasq configuration still contains legacy ipset directives'
+	fi
 	assert_file_contains "$work/trafix.conf" 'address=/blocked.example/0.0.0.0'
 	rm -rf "$work"
 }
@@ -114,7 +126,7 @@ test_proxy_default_and_disabled_rule() {
 	assert_file_not_contains "$work/state/block-domain.list" 'ignored.example'
 	assert_file_contains "$work/state/bypass-ipset.conf" '192.0.2.9'
 	assert_file_contains "$work/state/block-ip6set.conf" '2001:db8:2::9/128'
-	assert_file_contains "$work/trafix.conf" 'ipset=/direct.example/trafix-bypass,trafix6-bypass'
+	assert_file_contains "$work/trafix.conf" 'nftset=/direct.example/4#inet#trafix#bypass4,6#inet#trafix#bypass6'
 	assert_file_not_contains "$work/trafix.conf" 'address=/ignored.example/0.0.0.0'
 	rm -rf "$work"
 }

@@ -63,6 +63,21 @@ service_log() {
 	echo "[trafix/init] $*"
 }
 
+validate_nft_runtime() {
+	command -v nft >/dev/null 2>&1 || {
+		echo "[trafix/init] ERROR: nft is required" >&2
+		return 1
+	}
+	command -v dnsmasq >/dev/null 2>&1 || {
+		echo "[trafix/init] ERROR: dnsmasq is required" >&2
+		return 1
+	}
+	dnsmasq --version | grep -m1 'Compile time options:' | grep -q ' nftset\( \|$\)' || {
+		echo "[trafix/init] ERROR: dnsmasq does not support nftset" >&2
+		return 1
+	}
+}
+
 update_runtime_state() {
 	config_file="$(resolve_config_file)"
 	service_log "building runtime state from $config_file"
@@ -100,42 +115,6 @@ resolve_owner_bypass() {
 		return 1
 	}
 	service_log "owner bypass: $OWNER_BYPASS_USER (uid $OWNER_BYPASS_UID)"
-}
-
-setup_filter_output_ipv4() {
-	run_cmd "iptables -N TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	if [ -n "$OWNER_BYPASS_UID" ]; then
-		run_cmd "iptables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
-	fi
-	run_cmd "iptables -C TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER 2>/dev/null || iptables -A TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER"
-	run_cmd "iptables -C OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null || iptables -A OUTPUT -j TRAFIX_FILTER_OUTPUT"
-}
-
-setup_filter_output_ipv6() {
-	run_cmd "ip6tables -N TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	if [ -n "$OWNER_BYPASS_UID" ]; then
-		run_cmd "ip6tables -C TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
-	fi
-	run_cmd "ip6tables -C TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER 2>/dev/null || ip6tables -A TRAFIX_FILTER_OUTPUT -j TRAFIX_FILTER"
-	run_cmd "ip6tables -C OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null || ip6tables -A OUTPUT -j TRAFIX_FILTER_OUTPUT"
-}
-
-setup_redir_output_ipv4() {
-	run_cmd "iptables -t nat -N TRAFIX_OUTPUT 2>/dev/null"
-	if [ -n "$OWNER_BYPASS_UID" ]; then
-		run_cmd "iptables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
-	fi
-	run_cmd "iptables -t nat -C TRAFIX_OUTPUT -j TRAFIX 2>/dev/null || iptables -t nat -A TRAFIX_OUTPUT -j TRAFIX"
-	run_cmd "iptables -t nat -C OUTPUT -j TRAFIX_OUTPUT 2>/dev/null || iptables -t nat -A OUTPUT -j TRAFIX_OUTPUT"
-}
-
-setup_redir_output_ipv6() {
-	run_cmd "ip6tables -t nat -N TRAFIX_OUTPUT 2>/dev/null"
-	if [ -n "$OWNER_BYPASS_UID" ]; then
-		run_cmd "ip6tables -t nat -C TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -m owner --uid-owner \"$OWNER_BYPASS_UID\" -j RETURN"
-	fi
-	run_cmd "ip6tables -t nat -C TRAFIX_OUTPUT -j TRAFIX 2>/dev/null || ip6tables -t nat -A TRAFIX_OUTPUT -j TRAFIX"
-	run_cmd "ip6tables -t nat -C OUTPUT -j TRAFIX_OUTPUT 2>/dev/null || ip6tables -t nat -A OUTPUT -j TRAFIX_OUTPUT"
 }
 
 test_dns_domain() {
@@ -176,11 +155,11 @@ ensure_proxy() {
 	case "$family" in
 		ipv4)
 			record_type="a"
-			set_name="trafix"
+			set_name="proxy4"
 			;;
 		ipv6)
 			record_type="aaaa"
-			set_name="trafix6"
+			set_name="proxy6"
 			;;
 		*)
 			return 1
@@ -188,9 +167,9 @@ ensure_proxy() {
 	esac
 	ips="$(nslookup -type="$record_type" "$name" | awk '/Address / && $3 != "127.0.0.1" {print $3}')"
 	for ip in $ips; do
-		ipset -q test "$set_name" "$ip" || {
-			echo "ipset add ${set_name} ${ip} for ${name}"
-			run_cmd "ipset add ${set_name} \"$ip\""
+		nft get element inet trafix "$set_name" "{ $ip }" >/dev/null 2>&1 || {
+			echo "nft add element inet trafix ${set_name} { ${ip} } for ${name}"
+			run_cmd "nft add element inet trafix \"$set_name\" \"{ $ip }\""
 		}
 	done
 }
@@ -249,169 +228,157 @@ load_runtime_env() {
 	fi
 }
 
-add_entries() {
+add_nft_entries() {
 	set_name="$1"
 	file_path="$2"
 	[ -f "$file_path" ] || return 0
 	while IFS= read -r value; do
-		[ -n "$value" ] && run_cmd "ipset -q add \"$set_name\" \"$value\""
+		[ -n "$value" ] && run_cmd "nft add element inet trafix \"$set_name\" \"{ $value }\" 2>/dev/null || true"
 	done < "$file_path"
 }
 
-setup_ipset_ipv4() {
-	run_cmd "ipset create trafix hash:ip 2>/dev/null"
-	add_entries trafix "$PROXY_IPSET_CONF"
-
-	run_cmd "ipset create trafix-net hash:net 2>/dev/null"
-	add_entries trafix-net "$PROXY_IPSET_NET_CONF"
-
-	run_cmd "ipset create trafix-bypass hash:ip 2>/dev/null"
-	add_entries trafix-bypass "$BYPASS_IPSET_CONF"
-
-	run_cmd "ipset create trafix-bypass-net hash:net 2>/dev/null"
-	add_entries trafix-bypass-net "$BYPASS_IPSET_NET_CONF"
-
-	run_cmd "ipset create trafix-block hash:ip 2>/dev/null"
-	add_entries trafix-block "$BLOCK_IPSET_CONF"
-
-	run_cmd "ipset create trafix-block-net hash:net 2>/dev/null"
-	add_entries trafix-block-net "$BLOCK_IPSET_NET_CONF"
+create_nft_set() {
+	set_name="$1"
+	address_type="$2"
+	run_cmd "nft 'add set inet trafix $set_name { type $address_type; flags interval; }' 2>/dev/null || true"
 }
 
-setup_ipset_ipv6() {
-	run_cmd "ipset create trafix6 hash:ip family inet6 2>/dev/null"
-	add_entries trafix6 "$PROXY_IP6SET_CONF"
+setup_nft_sets() {
+	run_cmd "nft add table inet trafix 2>/dev/null || true"
+	for set_name in proxy4 proxy4_net bypass4 bypass4_net block4 block4_net; do
+		create_nft_set "$set_name" ipv4_addr
+	done
+	for set_name in proxy6 proxy6_net bypass6 bypass6_net block6 block6_net; do
+		create_nft_set "$set_name" ipv6_addr
+	done
 
-	run_cmd "ipset create trafix6-net hash:net family inet6 2>/dev/null"
-	add_entries trafix6-net "$PROXY_IP6SET_NET_CONF"
-
-	run_cmd "ipset create trafix6-bypass hash:ip family inet6 2>/dev/null"
-	add_entries trafix6-bypass "$BYPASS_IP6SET_CONF"
-
-	run_cmd "ipset create trafix6-bypass-net hash:net family inet6 2>/dev/null"
-	add_entries trafix6-bypass-net "$BYPASS_IP6SET_NET_CONF"
-
-	run_cmd "ipset create trafix6-block hash:ip family inet6 2>/dev/null"
-	add_entries trafix6-block "$BLOCK_IP6SET_CONF"
-
-	run_cmd "ipset create trafix6-block-net hash:net family inet6 2>/dev/null"
-	add_entries trafix6-block-net "$BLOCK_IP6SET_NET_CONF"
+	add_nft_entries proxy4 "$PROXY_IPSET_CONF"
+	add_nft_entries proxy4_net "$PROXY_IPSET_NET_CONF"
+	add_nft_entries proxy6 "$PROXY_IP6SET_CONF"
+	add_nft_entries proxy6_net "$PROXY_IP6SET_NET_CONF"
+	add_nft_entries bypass4 "$BYPASS_IPSET_CONF"
+	add_nft_entries bypass4_net "$BYPASS_IPSET_NET_CONF"
+	add_nft_entries bypass6 "$BYPASS_IP6SET_CONF"
+	add_nft_entries bypass6_net "$BYPASS_IP6SET_NET_CONF"
+	add_nft_entries block4 "$BLOCK_IPSET_CONF"
+	add_nft_entries block4_net "$BLOCK_IPSET_NET_CONF"
+	add_nft_entries block6 "$BLOCK_IP6SET_CONF"
+	add_nft_entries block6_net "$BLOCK_IP6SET_NET_CONF"
 }
 
-setup_block_filter_ipv4() {
-	run_cmd "iptables -N TRAFIX_FILTER 2>/dev/null"
-	run_cmd "iptables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || iptables -A FORWARD -j TRAFIX_FILTER"
-	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block dst -j DROP"
-	run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-block-net dst -j DROP"
+flush_nft_sets() {
+	for set_name in proxy4 proxy4_net bypass4 bypass4_net block4 block4_net \
+		proxy6 proxy6_net bypass6 bypass6_net block6 block6_net; do
+		run_cmd "nft flush set inet trafix $set_name 2>/dev/null || true"
+	done
 }
 
-setup_block_filter_ipv6() {
-	run_cmd "ip6tables -N TRAFIX_FILTER 2>/dev/null"
-	run_cmd "ip6tables -C FORWARD -j TRAFIX_FILTER 2>/dev/null || ip6tables -A FORWARD -j TRAFIX_FILTER"
-	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block dst -j DROP"
-	run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-block-net dst -j DROP"
+delete_nft_chains() {
+	for chain_name in prerouting output_nat forward_filter output_filter; do
+		run_cmd "nft delete chain inet trafix $chain_name 2>/dev/null || true"
+	done
 }
 
-setup_http3_block_ipv4() {
-	port_policy="$1"
-	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
-	[ "$block_proxy_http3" = 1 ] || return 0
-
-	run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block dst -j DROP"
-	run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-block-net dst -j DROP"
-
-	case "$port_policy" in
-		proxy)
-			run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass dst -j RETURN"
-			run_cmd "iptables -C TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -A TRAFIX_FILTER -m set --match-set trafix-bypass-net dst -j RETURN"
-			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -j DROP"
-			;;
-		*)
-			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix dst -j DROP"
-			run_cmd "iptables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP 2>/dev/null || iptables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix-net dst -j DROP"
-			;;
-	esac
+cleanup_legacy_iptables() {
+	# Remove hooks/chains left behind when upgrading from the ipset backend.
+	for family_cmd in iptables ip6tables; do
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -D OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -D OUTPUT -j TRAFIX_FILTER 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -D FORWARD -j TRAFIX_FILTER 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -F TRAFIX_FILTER_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -X TRAFIX_FILTER_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -F TRAFIX_FILTER 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -X TRAFIX_FILTER 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -D OUTPUT -j TRAFIX_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -D OUTPUT -j TRAFIX 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -D PREROUTING -j TRAFIX 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -F TRAFIX_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -X TRAFIX_OUTPUT 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -F TRAFIX 2>/dev/null || true"
+		run_cmd "command -v $family_cmd >/dev/null 2>&1 || true; $family_cmd -t nat -X TRAFIX 2>/dev/null || true"
+	done
+	for set_name in trafix trafix-net trafix6 trafix6-net \
+		trafix-bypass trafix-bypass-net trafix6-bypass trafix6-bypass-net \
+		trafix-block trafix-block-net trafix6-block trafix6-block-net; do
+		run_cmd "command -v ipset >/dev/null 2>&1 || true; ipset destroy $set_name 2>/dev/null || true"
+	done
 }
 
-setup_http3_block_ipv6() {
-	port_policy="$1"
-	config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
-	[ "$block_proxy_http3" = 1 ] || return 0
-
-	run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block dst -j DROP"
-	run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-block-net dst -j DROP"
-
-	case "$port_policy" in
-		proxy)
-			run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass dst -j RETURN"
-			run_cmd "ip6tables -C TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -A TRAFIX_FILTER -m set --match-set trafix6-bypass-net dst -j RETURN"
-			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -j DROP"
-			;;
-		*)
-			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6 dst -j DROP"
-			run_cmd "ip6tables -C TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP 2>/dev/null || ip6tables -A TRAFIX_FILTER -p udp --dport 443 -m set --match-set trafix6-net dst -j DROP"
-			;;
-	esac
+add_nft_rule() {
+	chain_name="$1"
+	shift
+	run_cmd "nft add rule inet trafix $chain_name $*"
 }
 
-setup_redir_iptables_ipv4() {
-	port="$1"
+setup_nftables() {
+	port4="$1"
+	port6="$2"
 	load_runtime_env
+	setup_nft_sets
+	delete_nft_chains
 
-	run_cmd "iptables -t nat -N TRAFIX 2>/dev/null"
-	run_cmd "iptables -t nat -C TRAFIX -m set --match-set trafix-bypass dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass dst -j RETURN"
-	run_cmd "iptables -t nat -C TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN 2>/dev/null || iptables -t nat -A TRAFIX -m set --match-set trafix-bypass-net dst -j RETURN"
+	run_cmd "nft 'add chain inet trafix prerouting { type nat hook prerouting priority dstnat; policy accept; }'"
+	run_cmd "nft 'add chain inet trafix output_nat { type nat hook output priority dstnat; policy accept; }'"
+	run_cmd "nft 'add chain inet trafix forward_filter { type filter hook forward priority filter; policy accept; }'"
+	run_cmd "nft 'add chain inet trafix output_filter { type filter hook output priority filter; policy accept; }'"
 
-	case "$FINAL_ACTION" in
-		proxy)
-			run_cmd "iptables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports \"$port\""
-			setup_http3_block_ipv4 proxy
-			;;
-		*)
-			run_cmd "iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix dst -j REDIRECT --to-ports \"$port\""
-			run_cmd "iptables -t nat -C TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || iptables -t nat -A TRAFIX -p tcp -m set --match-set trafix-net dst -j REDIRECT --to-ports \"$port\""
-			setup_http3_block_ipv4 bypass
-			;;
-	esac
+	if [ -n "$OWNER_BYPASS_UID" ]; then
+		add_nft_rule output_nat meta skuid "$OWNER_BYPASS_UID" return
+		add_nft_rule output_filter meta skuid "$OWNER_BYPASS_UID" return
+	fi
 
-	run_cmd "iptables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || iptables -t nat -A PREROUTING -j TRAFIX"
-	setup_redir_output_ipv4
-}
+	for chain_name in prerouting output_nat; do
+		add_nft_rule "$chain_name" ip daddr @bypass4 return
+		add_nft_rule "$chain_name" ip daddr @bypass4_net return
+		add_nft_rule "$chain_name" ip6 daddr @bypass6 return
+		add_nft_rule "$chain_name" ip6 daddr @bypass6_net return
+		case "$FINAL_ACTION" in
+			proxy)
+				add_nft_rule "$chain_name" meta nfproto ipv4 meta l4proto tcp redirect to ":$port4"
+				add_nft_rule "$chain_name" meta nfproto ipv6 meta l4proto tcp redirect to ":$port6"
+				;;
+			*)
+				add_nft_rule "$chain_name" ip daddr @proxy4 meta l4proto tcp redirect to ":$port4"
+				add_nft_rule "$chain_name" ip daddr @proxy4_net meta l4proto tcp redirect to ":$port4"
+				add_nft_rule "$chain_name" ip6 daddr @proxy6 meta l4proto tcp redirect to ":$port6"
+				add_nft_rule "$chain_name" ip6 daddr @proxy6_net meta l4proto tcp redirect to ":$port6"
+				;;
+		esac
+	done
 
-setup_redir_iptables_ipv6() {
-	port="$1"
-	load_runtime_env
-
-	run_cmd "ip6tables -t nat -N TRAFIX 2>/dev/null"
-	run_cmd "ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass dst -j RETURN"
-	run_cmd "ip6tables -t nat -C TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN 2>/dev/null || ip6tables -t nat -A TRAFIX -m set --match-set trafix6-bypass-net dst -j RETURN"
-
-	case "$FINAL_ACTION" in
-		proxy)
-			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -j REDIRECT --to-ports \"$port\""
-			setup_http3_block_ipv6 proxy
-			;;
-		*)
-			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6 dst -j REDIRECT --to-ports \"$port\""
-			run_cmd "ip6tables -t nat -C TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports \"$port\" 2>/dev/null || ip6tables -t nat -A TRAFIX -p tcp -m set --match-set trafix6-net dst -j REDIRECT --to-ports \"$port\""
-			setup_http3_block_ipv6 bypass
-			;;
-	esac
-
-	run_cmd "ip6tables -t nat -C PREROUTING -j TRAFIX 2>/dev/null || ip6tables -t nat -A PREROUTING -j TRAFIX"
-	setup_redir_output_ipv6
+	for chain_name in forward_filter output_filter; do
+		add_nft_rule "$chain_name" ip daddr @block4 drop
+		add_nft_rule "$chain_name" ip daddr @block4_net drop
+		add_nft_rule "$chain_name" ip6 daddr @block6 drop
+		add_nft_rule "$chain_name" ip6 daddr @block6_net drop
+		config_get_bool block_proxy_http3 'general' 'block_proxy_http3'
+		[ "$block_proxy_http3" = 1 ] || continue
+		case "$FINAL_ACTION" in
+			proxy)
+				add_nft_rule "$chain_name" ip daddr @bypass4 return
+				add_nft_rule "$chain_name" ip daddr @bypass4_net return
+				add_nft_rule "$chain_name" ip6 daddr @bypass6 return
+				add_nft_rule "$chain_name" ip6 daddr @bypass6_net return
+				add_nft_rule "$chain_name" udp dport 443 drop
+				;;
+			*)
+				add_nft_rule "$chain_name" ip daddr @proxy4 udp dport 443 drop
+				add_nft_rule "$chain_name" ip daddr @proxy4_net udp dport 443 drop
+				add_nft_rule "$chain_name" ip6 daddr @proxy6 udp dport 443 drop
+				add_nft_rule "$chain_name" ip6 daddr @proxy6_net udp dport 443 drop
+				;;
+		esac
+	done
 }
 
 start() {
 	service_log "starting"
+	initialized_now=0
+	[ "$DRY_RUN" = 1 ] || validate_nft_runtime || return 1
 	if [ "$DRY_RUN" != 1 ] && [ ! -f "$RUNTIME_ENV" ]; then
 		service_log "runtime state is not initialized; running initial update"
 		update_runtime_state || return 1
-		service_log "restarting dnsmasq to load generated configuration"
-		restart_dnsmasq || {
-			echo "[trafix/init] ERROR: failed to restart dnsmasq" >&2
-			return 1
-		}
+		initialized_now=1
 	elif [ "$DRY_RUN" != 1 ]; then
 		service_log "using initialized runtime state (run '/etc/init.d/trafix update' to rebuild)"
 	else
@@ -423,18 +390,16 @@ start() {
 	config_get port6 'general' 'redir_ipv6_port'
 	resolve_owner_bypass || return 1
 
-	service_log "configuring IPv4 ipsets"
-	setup_ipset_ipv4
-	service_log "configuring IPv6 ipsets"
-	setup_ipset_ipv6
-	service_log "configuring block filters"
-	setup_block_filter_ipv4
-	setup_block_filter_ipv6
-	setup_filter_output_ipv4
-	setup_filter_output_ipv6
-	service_log "configuring redirects (IPv4 port: $port4, IPv6 port: $port6)"
-	setup_redir_iptables_ipv4 "$port4"
-	setup_redir_iptables_ipv6 "$port6"
+	cleanup_legacy_iptables
+	service_log "configuring nftables sets, filters, and redirects (IPv4 port: $port4, IPv6 port: $port6)"
+	setup_nftables "$port4" "$port6"
+	if [ "$initialized_now" = 1 ]; then
+		service_log "restarting dnsmasq to load generated nftset configuration"
+		restart_dnsmasq || {
+			echo "[trafix/init] ERROR: failed to restart dnsmasq" >&2
+			return 1
+		}
+	fi
 	load_runtime_env
 	service_log "started (final action: $FINAL_ACTION)"
 }
@@ -446,64 +411,21 @@ restart_dnsmasq() {
 update() {
 	service_log "updating runtime state"
 	update_runtime_state || return 1
-	service_log "restarting dnsmasq to load generated configuration"
+	service_log "reapplying nftables rules and sets"
+	stop
+	flush_nft_sets
+	start || return 1
+	service_log "restarting dnsmasq to load generated nftset configuration"
 	restart_dnsmasq || {
 		echo "[trafix/init] ERROR: failed to restart dnsmasq" >&2
 		return 1
 	}
-	service_log "reapplying firewall and ipset rules"
-	stop
-	start
 	service_log "update applied"
 }
 
-cleanup_filter_ipv4() {
-	run_cmd "iptables -D OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	run_cmd "iptables -F TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	run_cmd "iptables -X TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	# Remove the direct hook used by trafix versions before owner bypass chains.
-	run_cmd "iptables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
-	run_cmd "iptables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
-	run_cmd "iptables -F TRAFIX_FILTER 2>/dev/null"
-	run_cmd "iptables -X TRAFIX_FILTER 2>/dev/null"
-}
-
-cleanup_filter_ipv6() {
-	run_cmd "ip6tables -D OUTPUT -j TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -F TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -X TRAFIX_FILTER_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -D OUTPUT -j TRAFIX_FILTER 2>/dev/null"
-	run_cmd "ip6tables -D FORWARD -j TRAFIX_FILTER 2>/dev/null"
-	run_cmd "ip6tables -F TRAFIX_FILTER 2>/dev/null"
-	run_cmd "ip6tables -X TRAFIX_FILTER 2>/dev/null"
-}
-
-cleanup_redir_iptables_ipv4() {
-	run_cmd "iptables -t nat -D OUTPUT -j TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "iptables -t nat -F TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "iptables -t nat -X TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "iptables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
-	run_cmd "iptables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
-	run_cmd "iptables -t nat -F TRAFIX 2>/dev/null"
-	run_cmd "iptables -t nat -X TRAFIX 2>/dev/null"
-	cleanup_filter_ipv4
-}
-
-cleanup_redir_iptables_ipv6() {
-	run_cmd "ip6tables -t nat -D OUTPUT -j TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -t nat -F TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -t nat -X TRAFIX_OUTPUT 2>/dev/null"
-	run_cmd "ip6tables -t nat -D OUTPUT -j TRAFIX 2>/dev/null"
-	run_cmd "ip6tables -t nat -D PREROUTING -j TRAFIX 2>/dev/null"
-	run_cmd "ip6tables -t nat -F TRAFIX 2>/dev/null"
-	run_cmd "ip6tables -t nat -X TRAFIX 2>/dev/null"
-	cleanup_filter_ipv6
-}
-
 stop() {
-	service_log "stopping and removing firewall rules"
-	cleanup_redir_iptables_ipv4
-	cleanup_redir_iptables_ipv6
+	service_log "stopping and removing nftables rules"
+	delete_nft_chains
 	service_log "stopped"
 }
 

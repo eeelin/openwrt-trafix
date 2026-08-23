@@ -9,7 +9,6 @@ This directory contains a standard OpenWrt package definition for `trafix`.
 - `files/etc/trafix/config.yaml`: unified rule configuration
 - `files/etc/init.d/trafix`: service script
 - `files/usr/lib/trafix/update.sh`: internal rule compiler used by the service
-- `files/usr/bin/trafix2dnsmasq.sh`: dnsmasq helper script
 
 ## Config model
 
@@ -47,6 +46,19 @@ rule_sets:
 ```
 
 Generated runtime artifacts are written under `/var/trafix/`.
+
+trafix uses native nftables sets in the `inet trafix` table. The installed
+dnsmasq must advertise `nftset` in its compile-time options:
+
+```sh
+dnsmasq --version | grep 'Compile time options'
+nft list table inet trafix
+```
+
+Generated domain rules use dnsmasq directives such as
+`4#inet#trafix#proxy4` and `6#inet#trafix#proxy6`. Legacy ipset and
+iptables/ip6tables dependencies are not required; their old trafix chains and
+sets are removed automatically during migration.
 
 The generated dnsmasq fragment defaults to `/tmp/dnsmasq.d/trafix.conf`.
 Set `dnsmasq_conf_dir` when the active dnsmasq instance uses a different
@@ -98,7 +110,7 @@ Run configured connectivity / DNS checks with:
 
 ## Dry run
 
-To review the ipset / iptables / ip6tables commands without applying them on the router:
+To review the nftables commands without applying them on the router:
 
 ```sh
 /etc/init.d/trafix dryrun_start
@@ -158,4 +170,4 @@ editing the YAML configuration, explicitly rebuild and apply it with:
 ```
 
 The update action rebuilds generated state, restarts dnsmasq so it reads the
-new `trafix.conf`, and reapplies the ipset and firewall rules.
+new `trafix.conf`, and reapplies the nftables sets and firewall rules.
