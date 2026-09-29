@@ -40,6 +40,12 @@ jobs:
       - name: Run YAML configuration tests
         run: bash tests/test_trafix_config.sh
 
+      - name: Run configuration tests with real yq
+        run: |
+          curl -fsSL --retry 3 https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o "$RUNNER_TEMP/yq"
+          chmod +x "$RUNNER_TEMP/yq"
+          TRAFIX_TEST_YQ="$RUNNER_TEMP/yq" bash tests/test_trafix_config.sh
+
       - name: Run installer tests
         run: bash tests/test_install.sh
 
