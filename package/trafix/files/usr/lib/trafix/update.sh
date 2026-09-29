@@ -253,13 +253,18 @@ fetch_rule_set_source() {
 }
 
 build_rule_set() {
+	local tag out_file cache_file rule_set_json type format source_file source_json
+	local location_key location matcher_json payload_line decoded_file
 	tag="$1"
-	out_file="$RULESET_CACHE_DIR/$tag.tsv"
-	[ -f "$out_file" ] && return 0
-	: > "$out_file"
+	cache_file="$RULESET_CACHE_DIR/$tag.tsv"
+	[ -f "$cache_file" ] && return 0
 
 	rule_set_json="$(jq -c --arg tag "$tag" '.rule_sets[]? | select(.tag == $tag)' "$CONFIG_JSON")"
 	[ -n "$rule_set_json" ] || fail "undefined rule_set tag: $tag"
+	printf '%s' "$rule_set_json" | jq -e 'has("fotmat") | not' >/dev/null ||
+		fail "rule_set '$tag': unknown field 'fotmat'; use 'format' (clash sources require format: clash)"
+	out_file="$TMP_DIR/$tag.tsv"
+	: > "$out_file"
 
 	type="$(printf '%s' "$rule_set_json" | jq -r '.type // empty')"
 	format="$(printf '%s' "$rule_set_json" | jq -r '.format // "trafix"')"
@@ -280,13 +285,21 @@ build_rule_set() {
 			fetch_rule_set_source "$type" "$location" "$source_file"
 			case "$format" in
 				trafix|yaml)
-					yq -o=json '.' "$source_file" | jq -c '.match[]? | select(.enabled != false)' | while IFS= read -r matcher_json; do
+					source_json="$TMP_DIR/$tag.json"
+					yq -o=json '.' "$source_file" > "$source_json" || fail "failed to parse rule_set '$tag' source"
+					jq -e '.match | type == "array"' "$source_json" >/dev/null ||
+						fail "rule_set '$tag' format '$format' requires a match array; for Clash payload sources use format: clash"
+					jq -c '.match[] | select(.enabled != false)' "$source_json" | while IFS= read -r matcher_json; do
 						[ "$(matcher_key_count "$matcher_json")" -eq 1 ] || fail "rule_set '$tag' source contains a matcher with invalid key count"
 						append_match_json "$matcher_json" "$out_file"
 					done
 					;;
 				payload|clash)
-					yq -r '.payload[]? // empty' "$source_file" | while IFS= read -r payload_line; do
+					source_json="$TMP_DIR/$tag.json"
+					yq -o=json '.' "$source_file" > "$source_json" || fail "failed to parse rule_set '$tag' source"
+					jq -e '.payload | type == "array"' "$source_json" >/dev/null ||
+						fail "rule_set '$tag' format '$format' requires a payload array"
+					jq -r '.payload[]' "$source_json" | while IFS= read -r payload_line; do
 						append_payload_line "$payload_line" "$out_file"
 					done
 					;;
@@ -304,6 +317,7 @@ build_rule_set() {
 			fail "unsupported rule_set type '$type' for tag '$tag'"
 			;;
 	esac
+	mv "$out_file" "$cache_file"
 }
 
 append_compiled_match() {

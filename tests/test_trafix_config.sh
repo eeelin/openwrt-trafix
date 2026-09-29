@@ -25,6 +25,9 @@ assert_file_not_contains() {
 
 install_test_yq() {
 	local fakebin="$1"
+	if [[ -n "${TRAFIX_TEST_YQ:-}" ]]; then
+		ln -sf "$TRAFIX_TEST_YQ" "$fakebin/yq"
+	else
 	cat >"$fakebin/yq" <<'PY'
 #!/usr/bin/env python3
 import json
@@ -32,7 +35,6 @@ import sys
 import yaml
 
 args = sys.argv[1:]
-raw = "-r" in args
 expression = next((arg for arg in args if not arg.startswith("-")), ".")
 source = args[-1]
 with open(source, encoding="utf-8") as stream:
@@ -40,13 +42,11 @@ with open(source, encoding="utf-8") as stream:
 
 if expression == ".":
     print(json.dumps(data, separators=(",", ":")))
-elif raw and expression == ".payload[]? // empty":
-    for value in data.get("payload", []):
-        print(value)
 else:
     raise SystemExit(f"unsupported test yq expression: {expression}")
 PY
 	chmod +x "$fakebin/yq"
+	fi
 	cat > "$fakebin/dnsmasq" <<'EOF'
 #!/bin/sh
 echo 'Compile time options: IPv6 nftset'
@@ -253,6 +253,50 @@ EOF
 	rm -rf "$work"
 }
 
+test_broker_rule_set_validation() {
+	local work format reference expected scenario status
+	work="$(mktemp -d)"
+	cp "$FIXTURES/trafix-payload.yaml" "$work/broker.yaml"
+	for scenario in undefined typo wrong-format wrong-payload malformed valid; do
+		format='format: clash'
+		reference=hk-broker
+		case "$scenario" in
+			undefined) reference=broker; expected='undefined rule_set tag: broker' ;;
+			typo) format='fotmat: yaml'; expected="unknown field 'fotmat'" ;;
+			wrong-format) format='format: yaml'; expected='requires a match array' ;;
+			wrong-payload) cp "$FIXTURES/trafix-rules.yaml" "$work/broker.yaml"; expected='requires a payload array' ;;
+			malformed) printf 'payload: [\n' > "$work/broker.yaml"; expected='failed to parse rule_set' ;;
+			valid) cp "$FIXTURES/trafix-payload.yaml" "$work/broker.yaml" ;;
+		esac
+		cat > "$work/config.yaml" <<EOF
+rule_sets:
+  - tag: hk-broker
+    type: local
+    $format
+    path: broker.yaml
+route_rules:
+  - rule_set: [$reference]
+    action: proxy
+EOF
+		if [[ "$scenario" == valid ]]; then
+			run_update "$work/config.yaml" "$work"
+			assert_file_contains "$work/state/rule-set-cache/hk-broker.tsv" $'domain\tpayload.example'
+			assert_file_contains "$work/state/proxy-domain.list" 'payload.example'
+		else
+			# Capture status without placing run_update in a conditional, which
+			# would disable errexit inside the function.
+			set +e
+			(set -e; run_update "$work/config.yaml" "$work") > "$work/error.log" 2>&1
+			status=$?
+			set -e
+			[[ "$status" -ne 0 ]] || fail "$scenario unexpectedly succeeded"
+			grep -Fq "$expected" "$work/error.log" || fail "$scenario missing diagnostic: $expected"
+			[[ ! -e "$work/state/rule-set-cache/$reference.tsv" ]] || fail "$scenario published invalid cache"
+		fi
+	done
+	rm -rf "$work"
+}
+
 command -v jq >/dev/null || fail 'jq is required to run config tests'
 python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run config tests'
 
@@ -263,5 +307,6 @@ test_local_yaml_and_payload_rule_sets
 test_remote_gfwlist_rule_set
 test_absolute_local_rule_set_path
 test_update_rebuilds_rule_set_cache
+test_broker_rule_set_validation
 
 echo 'All trafix YAML configuration tests passed.'
