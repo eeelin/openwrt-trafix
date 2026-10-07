@@ -56,6 +56,13 @@ EOF
 exit 0
 EOF
 	chmod +x "$fakebin/dnsmasq" "$fakebin/nft"
+	cat > "$fakebin/sing-box" <<'EOF'
+#!/bin/sh
+[ "$1" = rule-set ] && [ "$2" = decompile ] && [ "$4" = -o ] || exit 2
+[ -n "${TRAFIX_TEST_SING_BOX_JSON:-}" ] || exit 3
+cp "$TRAFIX_TEST_SING_BOX_JSON" "$5"
+EOF
+	chmod +x "$fakebin/sing-box"
 }
 
 run_update() {
@@ -297,6 +304,73 @@ EOF
 	rm -rf "$work"
 }
 
+test_sing_box_json_and_srs_rule_sets() {
+	local work
+	work="$(mktemp -d)"
+	cat > "$work/config.yaml" <<EOF
+rule_sets:
+  - tag: source-json
+    type: local
+    format: sing-box-json
+    path: $FIXTURES/sing-box-rules.json
+  - tag: auto-json
+    type: local
+    format: sing-box
+    path: $FIXTURES/sing-box-rules.json
+  - tag: binary-srs
+    type: local
+    format: sing-box-srs
+    path: $FIXTURES/sing-box-rules.srs
+  - tag: auto-srs
+    type: local
+    format: sing-box
+    path: $FIXTURES/sing-box-rules.srs
+route_rules:
+  - rule_set: [source-json, auto-json, binary-srs, auto-srs]
+    action: proxy
+final_action: bypass
+EOF
+
+	TRAFIX_TEST_SING_BOX_JSON="$FIXTURES/sing-box-rules.json" run_update "$work/config.yaml" "$work"
+	for tag in source-json auto-json binary-srs auto-srs; do
+		assert_file_contains "$work/state/rule-set-cache/$tag.tsv" $'domain\texact.sing-box.example'
+		assert_file_contains "$work/state/rule-set-cache/$tag.tsv" $'domain_suffix\tsuffix.sing-box.example'
+		assert_file_contains "$work/state/rule-set-cache/$tag.tsv" $'ip_cidr\t192.0.2.0/24'
+		assert_file_contains "$work/state/rule-set-cache/$tag.tsv" $'ip6_cidr\t2001:db8:4::/64'
+	done
+	assert_file_contains "$work/state/proxy-domain.list" 'exact.sing-box.example'
+	assert_file_contains "$work/state/proxy-ipset-net.conf" '192.0.2.0/24'
+	assert_file_contains "$work/state/proxy-ip6set-net.conf" '2001:db8:4::/64'
+	rm -rf "$work"
+}
+
+test_sing_box_rejects_unrepresentable_rules() {
+	local work status
+	work="$(mktemp -d)"
+	cat > "$work/rules.json" <<'EOF'
+{"version":3,"rules":[{"domain_suffix":["example.com"],"port":[443]}]}
+EOF
+	cat > "$work/config.yaml" <<EOF
+rule_sets:
+  - tag: constrained
+    type: local
+    format: sing-box-json
+    path: $work/rules.json
+route_rules:
+  - rule_set: [constrained]
+    action: proxy
+EOF
+	set +e
+	(set -e; run_update "$work/config.yaml" "$work") > "$work/error.log" 2>&1
+	status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || fail 'unsupported sing-box rule unexpectedly succeeded'
+	grep -Fq 'must contain only non-inverted domain, domain_suffix, and ip_cidr rules' "$work/error.log" ||
+		fail 'unsupported sing-box rule did not report a useful error'
+	[[ ! -e "$work/state/rule-set-cache/constrained.tsv" ]] || fail 'unsupported sing-box rule published a cache'
+	rm -rf "$work"
+}
+
 command -v jq >/dev/null || fail 'jq is required to run config tests'
 python3 -c 'import yaml' >/dev/null 2>&1 || fail 'PyYAML is required to run config tests'
 
@@ -308,5 +382,7 @@ test_remote_gfwlist_rule_set
 test_absolute_local_rule_set_path
 test_update_rebuilds_rule_set_cache
 test_broker_rule_set_validation
+test_sing_box_json_and_srs_rule_sets
+test_sing_box_rejects_unrepresentable_rules
 
 echo 'All trafix YAML configuration tests passed.'

@@ -31,11 +31,21 @@ Currently supported matcher types in `route_rules` are:
 - `ip_cidr`
 - `ip6_cidr`
 
-Remote and local rule sets support `trafix`/`yaml`, `payload`/`clash`, and
-`gfwlist`/`autoproxy` formats. A GFWList source is expected to contain the
-standard Base64-encoded AutoProxy rules. Domain rules are compiled as
-`domain_suffix` matchers; comments, regular-expression rules, and `@@`
-exception rules are ignored because trafix operates at DNS/domain granularity.
+Remote and local rule sets support `trafix`/`yaml`, `payload`/`clash`,
+`gfwlist`/`autoproxy`, and sing-box source JSON or binary SRS files. Use
+`format: sing-box-json` for source JSON, `format: sing-box-srs` for SRS, or
+`format: sing-box` to detect either form from its content. SRS decoding uses
+`sing-box rule-set decompile`, so the `sing-box` command must be installed.
+
+Trafix imports sing-box `domain`, `domain_suffix`, and `ip_cidr` fields. It
+rejects inverted, logical, or constrained rules that cannot be represented by
+Trafix without changing their meaning. IPv4 and IPv6 values in `ip_cidr` are
+separated automatically.
+
+A GFWList source is expected to contain the standard Base64-encoded AutoProxy
+rules. Domain rules are compiled as `domain_suffix` matchers; comments,
+regular-expression rules, and `@@` exception rules are ignored because trafix
+operates at DNS/domain granularity.
 
 ```yaml
 rule_sets:
@@ -43,6 +53,14 @@ rule_sets:
     type: remote
     format: gfwlist
     url: https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt
+  - tag: sing-box-source
+    type: local
+    format: sing-box-json
+    path: rules.json
+  - tag: sing-box-binary
+    type: remote
+    format: sing-box-srs
+    url: https://example.com/rules.srs
 ```
 
 Generated runtime artifacts are written under `/var/trafix/`.
