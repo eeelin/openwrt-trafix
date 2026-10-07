@@ -229,6 +229,47 @@ append_payload_line() {
 	esac
 }
 
+append_sing_box_rule_set() {
+	local source_json out_file
+	source_json="$1"
+	out_file="$2"
+
+	jq -e '
+		type == "object" and
+		(.version | type == "number") and
+		(.rules | type == "array") and
+		all(.rules[];
+			type == "object" and
+			((.invert // false) == false) and
+			((keys - ["domain", "domain_suffix", "invert", "ip_cidr"]) | length == 0) and
+			all([.domain?, .domain_suffix?, .ip_cidr?] | map(select(. != null))[];
+				type == "string" or
+				(type == "array" and all(.[]; type == "string"))
+			)
+		)
+	' "$source_json" >/dev/null ||
+		fail "sing-box rule set must contain only non-inverted domain, domain_suffix, and ip_cidr rules"
+
+	jq -r '
+		def items: if type == "array" then .[] else . end;
+		.rules[] |
+		(.domain? | select(. != null) | items | "domain\t" + .),
+		(.domain_suffix? | select(. != null) | items | "domain_suffix\t" + .),
+		(.ip_cidr? | select(. != null) | items |
+			if contains(":") then "ip6_cidr\t" + . else "ip_cidr\t" + . end)
+	' "$source_json" >> "$out_file"
+}
+
+decompile_sing_box_rule_set() {
+	local source_file source_json
+	source_file="$1"
+	source_json="$2"
+	require_command sing-box
+	sing-box rule-set decompile "$source_file" -o "$source_json" >/dev/null 2>&1 ||
+		fail "failed to decompile sing-box binary rule set"
+	[ -s "$source_json" ] || fail "sing-box decompiler produced an empty rule set"
+}
+
 fetch_rule_set_source() {
 	local type location out_file source_path
 	type="$1"
@@ -254,7 +295,7 @@ fetch_rule_set_source() {
 
 build_rule_set() {
 	local tag out_file cache_file rule_set_json type format source_file source_json
-	local location_key location matcher_json payload_line decoded_file
+	local location_key location matcher_json payload_line decoded_file sing_box_mode
 	tag="$1"
 	cache_file="$RULESET_CACHE_DIR/$tag.tsv"
 	[ -f "$cache_file" ] && return 0
@@ -302,6 +343,27 @@ build_rule_set() {
 					jq -r '.payload[]' "$source_json" | while IFS= read -r payload_line; do
 						append_payload_line "$payload_line" "$out_file"
 					done
+					;;
+				sing-box|sing-box-json|sing-box-source|sing-box-srs|sing-box-binary|srs)
+					source_json="$TMP_DIR/$tag.json"
+					sing_box_mode="$format"
+					if [ "$format" = sing-box ]; then
+						if jq empty "$source_file" >/dev/null 2>&1; then
+							sing_box_mode=sing-box-json
+						else
+							sing_box_mode=sing-box-srs
+						fi
+					fi
+					case "$sing_box_mode" in
+						sing-box-json|sing-box-source)
+							jq '.' "$source_file" > "$source_json" ||
+								fail "failed to parse sing-box JSON rule set '$tag'"
+							;;
+						*)
+							decompile_sing_box_rule_set "$source_file" "$source_json"
+							;;
+					esac
+					append_sing_box_rule_set "$source_json" "$out_file"
 					;;
 				gfwlist|autoproxy)
 					decoded_file="$TMP_DIR/$tag.decoded"
